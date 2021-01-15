@@ -10,3 +10,8 @@ Obtain the Basel Face Model from these links:
  - https://faces.dmi.unibas.ch/bfm/bfm2019/restricted/model2019_face12.h5 (model cropped to the face region)
 
 Put the model files into a data folder and update the paths in `env.py` accordingly.
+
+### 1.2 Facial Keypoint detection
+
+You can download the pretrained facial keypoint detector here:
+http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
