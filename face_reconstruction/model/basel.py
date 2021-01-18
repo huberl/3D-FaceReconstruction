@@ -9,6 +9,9 @@ from env import BASEL_FACE_MODEL_PATH
 class BaselFaceModel:
 
     def __init__(self, shape_model, expression_model, color_model=None):
+        self.shape_model = shape_model
+        self.expression_model = expression_model
+        self.color_model = color_model
         self.face_model = eos.morphablemodel.MorphableModel(
             shape_model=shape_model,
             expression_model=expression_model,
@@ -57,4 +60,5 @@ class BaselFaceModel:
             vertices=face_mesh.vertices,
             faces=face_mesh.tvi,
             vertex_colors=face_mesh.colors,
-            face_colors=face_mesh.colors)
+            face_colors=face_mesh.colors,
+            process=False)
