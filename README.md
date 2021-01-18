@@ -15,3 +15,9 @@ Put the model files into a data folder and update the paths in `env.py` accordin
 
 You can download the pretrained facial keypoint detector here:
 http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2
+
+### 1.3 Environment variables
+
+Change the `DATA_PATH` and `MODEL_PATH` environment variables in `env.py` to point to the locations where you stored 
+the above files.
+If you commit changes, ensure to temporarily stash `env.py` in order to not push your local paths to the repository.
