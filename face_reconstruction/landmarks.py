@@ -2,8 +2,6 @@ from env import BASEL_FACE_MODEL_PATH, MODELS_PATH
 from face_reconstruction.utils.io import load_pickled, save_pickled
 import dlib
 import numpy as np
-import open3d
-import cv2
 from scipy import spatial
 
 
@@ -30,26 +28,27 @@ def detect_landmarks(img):
 
     return coords
 
-def detect_pcd_landmarks(img_path, pcd_path):
+def detect_pcd_landmarks(img, pcd,K):
     #intrinsic matrix from camera_info.yaml
-    K= [1052.667867276341, 0, 962.4130834944134, 0, 1052.020917785721, 536.2206151001486, 0, 0, 1]
-    pcd = open3d.io.read_point_cloud(pcd_path)
+    #K= [1052.667867276341, 0, 962.4130834944134, 0, 1052.020917785721, 536.2206151001486, 0, 0, 1]
+    #pcd = open3d.io.read_point_cloud(pcd_path)
     pcd_points=np.array(pcd.points)[:,:2]
+    #for faster searching the neighest neighboring point
     pcd_spatial = spatial.KDTree(pcd_points)
-    img = cv2.imread(img_path)
+    #img = cv2.imread(img_path)
     landmarks_img = detect_landmarks(img)
     def screenToCamera(x,y):
         p_x = (x - K[2]) / K[0]
         p_y = (y - K[5]) / K[4]
         return p_x,p_y
-    landmarks_pcd=[]
+    idx_landmarks_pcd=[]
     for l_point in landmarks_img:
         landmark_pcd = screenToCamera(l_point[0],l_point[1])
         index=pcd_spatial.query(landmark_pcd)[1]
-        landmarks_pcd.append(pcd.points[index])
+        idx_landmarks_pcd.append(index)
         #annotate landmark in pointcloud
         #pcd.colors[index]=[255,0,0]
-    return landmarks_pcd
+    return idx_landmarks_pcd
     
 
 
