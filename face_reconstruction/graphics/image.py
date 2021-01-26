@@ -1,4 +1,5 @@
 from statistics import mean
+import numpy as np
 
 
 def draw_pixels_to_image(img, pixels, color=1):
@@ -19,7 +20,7 @@ def cv2_to_plt(img):
     return img
 
 
-def interpolate_around(img, pixel, size=1):
+def interpolate_around(img: np.ndarray, pixel, size=1):
     """
     Returns the value at the given pixel coordinate if it is defined, i.e. not 0. Otherwise, tries to interpolate
     from neighbouring pixels by just averaging over defined values there.
@@ -40,6 +41,9 @@ def interpolate_around(img, pixel, size=1):
         an average of the closest defined values (depending on size), if there are neighbouring pixels with values
         0, otherwise
     """
+    img_width = img.shape[1]
+    img_height = img.shape[0]
+
     center_value = img[pixel[1], pixel[0]]
     if not center_value == 0:
         return center_value
@@ -48,9 +52,10 @@ def interpolate_around(img, pixel, size=1):
         for y_offset in range(-size, size + 1):
             x = pixel[0] + x_offset
             y = pixel[1] + y_offset
-            value = img[y, x]
-            if not value == 0:
-                values.append(value)
+            if 0 <= x < img_width and 0 <= y < img_height:
+                value = img[y, x]
+                if not value == 0:
+                    values.append(value)
     if len(values) > 0:
         return mean(values)
     else:

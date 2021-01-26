@@ -1,5 +1,5 @@
 from typing import Union, List
-from itertools import product
+
 import numpy as np
 
 
@@ -95,6 +95,11 @@ def backproject_points(intrinsics: np.ndarray, depth_values: np.ndarray, pixels:
     -------
         (n, 3) numpy array of the projected points
     """
+    if not isinstance(depth_values, np.ndarray):
+        depth_values = np.array(depth_values)
+    if not isinstance(pixels, np.ndarray):
+        pixels = np.array(pixels)
+
     if len(pixels.shape) == 2:
         pixels = np.hstack((pixels, np.ones((pixels.shape[0], 1))))
     intrinsics_inv = np.linalg.inv(intrinsics)
@@ -171,7 +176,7 @@ def register_rgb_depth(depth_data: np.ndarray, rgb_data: np.ndarray,
     rgb_height = rgb_data.shape[0]
     rgb_width = rgb_data.shape[1]
 
-    # backproject to 3D
+    # backproject to 3D and transform to color camera space
     points_depth_projected = backproject_image(depth_intrinsics, depth_data)
     points_depth_projected = extrinsics @ points_depth_projected.T
     points_depth_projected = points_depth_projected.T
@@ -183,6 +188,7 @@ def register_rgb_depth(depth_data: np.ndarray, rgb_data: np.ndarray,
     points = []
     colors = []
     positions = []
+    # Collect color information of corresponding pixels in RGB image
     for i, point_rgb_screen in enumerate(points_rgb_screen.T):
         x = point_rgb_screen[0]
         y = point_rgb_screen[1]

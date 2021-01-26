@@ -14,6 +14,9 @@ def add_row(array: np.ndarray, value):
     -------
         the array with an additional row at the bottom
     """
+    if not isinstance(array, np.ndarray):
+        array = np.array(array)
+
     if value == 1:
         extender = np.ones((1, array.shape[1]))
     elif value == 0:
@@ -37,6 +40,9 @@ def add_column(array: np.ndarray, value):
     -------
         the array with an additional column at the right
     """
+    if not isinstance(array, np.ndarray):
+        array = np.array(array)
+
     if value == 1:
         extender = np.ones((array.shape[0], 1))
     elif value == 0:
