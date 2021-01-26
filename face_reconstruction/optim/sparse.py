@@ -3,6 +3,7 @@ from pyquaternion import Quaternion
 
 from face_reconstruction.graphics import SimpleImageRenderer
 from face_reconstruction.model import BaselFaceModel
+from face_reconstruction.utils.math import add_column
 
 """
 Optimization is split into 3 modules:
@@ -117,6 +118,15 @@ class SparseOptimization:
             fixed_shape_coefficients=fixed_shape_coefficients,
             fixed_expression_coefficients=fixed_expression_coefficients)
 
+    def create_loss_3d(self,
+                       bfm_landmark_indices,
+                       img_landmark_points_3d):
+        return SparseOptimizationLoss3D(
+            optimization_manager=self,
+            bfm_landmark_indices=bfm_landmark_indices,
+            img_landmark_points_3d=img_landmark_points_3d
+        )
+
 
 class SparseOptimizationLoss:
 
@@ -184,6 +194,44 @@ class SparseOptimizationLoss:
         residuals = residuals.reshape(-1)
         # residuals = (residuals ** 2).sum()
         return residuals
+
+
+class SparseOptimizationLoss3D:
+    """
+    This loss optimizes a basel face model to fit a given set of 3D landmarks
+    """
+    def __init__(
+            self,
+            optimization_manager: SparseOptimization,
+            bfm_landmark_indices: np.ndarray,
+            img_landmark_points_3d: np.ndarray):
+        self.optimization_manager = optimization_manager
+        self.bfm_landmark_indices = bfm_landmark_indices
+        self.img_landmark_points_3d = img_landmark_points_3d
+
+    def loss(self, theta, *args, **kwargs):
+        parameters = self.optimization_manager.create_parameters_from_theta(theta)
+
+        shape_coefficients = parameters.shape_coefficients
+        expression_coefficients = parameters.expression_coefficients
+        camera_pose = parameters.camera_pose
+
+        face_mesh = self.optimization_manager.bfm.draw_sample(
+            shape_coefficients=shape_coefficients,
+            expression_coefficients=expression_coefficients,
+            color_coefficients=[0 for _ in range(self.optimization_manager.n_color_coefficients)])
+        bfm_vertices = add_column(np.array(face_mesh.vertices), 1)
+        bfm_vertices = camera_pose @ bfm_vertices.T
+        landmark_points = bfm_vertices.T[self.bfm_landmark_indices]
+
+        # Simple point-to-point distance of 3D landmarks
+        residuals = landmark_points[:, :3] - self.img_landmark_points_3d
+        residuals = residuals.reshape(-1)
+
+        return residuals
+
+    def __call__(self, *args, **kwargs):
+        return self.loss(args[0], args[1:], kwargs)
 
 
 class SparseOptimizationParameters:
