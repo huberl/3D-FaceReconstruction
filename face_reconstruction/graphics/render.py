@@ -208,12 +208,45 @@ def register_rgb_depth(depth_data: np.ndarray, rgb_data: np.ndarray,
 
 
 def get_perspective_camera(camera_intrinsics, img_width, img_height):
+    """
+    Creates a perspective projection camera matrix that matches precisely the camera that was used to generate the
+    image that the specified camera_intrinsics are coming from.
+    See https://stackoverflow.com/questions/46182845/field-of-view-aspect-ratio-view-matrix-from-projection-matrix-hmd-ost-calib/46195462
+
+    Parameters
+    ----------
+        camera_intrinsics:
+            (3, 3) Camera intrinsics of the camera that took the image of which the rendering should be imitated
+            with the returned perspective camera
+        img_width:
+            width of the given image
+        img_height:
+            height of the given image
+
+    Returns
+    -------
+        a pyrender camera that can be added to a scene to mimic how the original image was captured in real-life
+    """
+
     fov = 2.0 * math.atan(img_height / (2 * camera_intrinsics[1, 1]))
     aspect = img_width / img_height
     return pyrender.PerspectiveCamera(yfov=fov, aspectRatio=aspect)
 
 
 def setup_standard_scene(camera):
+    """
+    Creates an empty scene with some standard lighting and the given camera.
+
+    Parameters
+    ----------
+        camera:
+            pyrender camera that should be used for rendering
+
+    Returns
+    -------
+        an empty scene with lighting and camera set up.
+    """
+
     directional_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.0)
     scene = pyrender.Scene()
     scene.add(camera)
