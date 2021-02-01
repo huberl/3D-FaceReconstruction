@@ -1,6 +1,8 @@
+import math
 from typing import Union, List
 
 import numpy as np
+import pyrender
 
 
 class SimpleImageRenderer:
@@ -203,3 +205,17 @@ def register_rgb_depth(depth_data: np.ndarray, rgb_data: np.ndarray,
             colors.append(rgb_data[y, x])
 
     return np.array(points), np.array(colors), positions
+
+
+def get_perspective_camera(camera_intrinsics, img_width, img_height):
+    fov = 2.0 * math.atan(img_height / (2 * camera_intrinsics[1, 1]))
+    aspect = img_width / img_height
+    return pyrender.PerspectiveCamera(yfov=fov, aspectRatio=aspect)
+
+
+def setup_standard_scene(camera):
+    directional_light = pyrender.DirectionalLight(color=[1.0, 1.0, 1.0], intensity=2.0)
+    scene = pyrender.Scene()
+    scene.add(camera)
+    scene.add(directional_light)
+    return scene

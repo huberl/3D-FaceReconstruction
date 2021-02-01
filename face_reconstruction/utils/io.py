@@ -41,11 +41,10 @@ def list_file_numbering(directory, prefix, suffix=None):
     -------
         a list of numbers (without leading zeros) that appear in the matched file names in between `prefix` and `suffix`.
     """
-    if suffix is None:
+    if suffix is None or suffix.count('.') == 1 and suffix[0] == '.':
         suffix = ""
     regex = re.compile(f"{prefix}(-?\d+){Path(suffix).stem}")
     file_names = glob(f"{directory}/{prefix}*{suffix}")
     file_names = [Path(file_name).stem for file_name in file_names]
-
     numbering = sorted([int(regex.search(file_name).group(1)) for file_name in file_names if regex.match(file_name)])
     return numbering
