@@ -4,3 +4,4 @@ PLOTS_PATH = "<<ENTER_PLOTS_PATH>>"
 
 BASEL_FACE_MODEL_PATH = f"{DATA_PATH}/Basel Face Model 2019"
 BIWI_DATASET_PATH = f"{DATA_PATH}/rgb-d-scans/biwi"
+IPHONE_DATASET_PATH = f"{DATA_PATH}/rgb-d/iphone"
