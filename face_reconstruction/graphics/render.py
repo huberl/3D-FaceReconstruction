@@ -138,6 +138,7 @@ def backproject_image(intrinsics, depth_image):
     points_depth_screen = points_depth_screen.reshape(-1, 3)
 
     points_depth_projected = depth_intrinsics_inv @ points_depth_screen.T
+    points_depth_projected[1, :] = -points_depth_projected[1, :]  # Invert y-axis
     points_depth_projected = np.vstack((points_depth_projected, np.ones((1, points_depth_screen.shape[0]))))
     return points_depth_projected.T
 
