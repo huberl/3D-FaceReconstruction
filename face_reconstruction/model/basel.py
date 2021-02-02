@@ -54,6 +54,15 @@ class BaselFaceModel:
                                            expression_coefficients=expression_coefficients,
                                            color_coefficients=color_coefficients)
 
+    def get_shape_coefficients_variance(self):
+        return self.shape_model.get_eigenvalues()
+
+    def get_expression_coefficients_variance(self):
+        return self.expression_model.get_eigenvalues()
+
+    def get_color_coefficients_variance(self):
+        return self.color_model.get_eigenvalues()
+
     @staticmethod
     def convert_to_trimesh(face_mesh):
         return trimesh.Trimesh(

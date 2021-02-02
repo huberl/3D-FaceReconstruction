@@ -10,5 +10,5 @@ setup(
     author_email='kirschto@in.tum.de',
     description='',
     install_requires=['h5py', 'eos-py', 'pyrender', 'numpy', 'opencv-python', 'imutils', 'dlib', 'pyquaternion', 'tqdm',
-                      'open3d', 'sklearn']
+                      'open3d', 'sklearn', 'deprecated']
 )
