@@ -47,7 +47,8 @@ class BFMOptimization:
                  n_params_expression,
                  fix_camera_pose=False,
                  weight_shape_params=1.0,
-                 weight_expression_params=1.0):
+                 weight_expression_params=1.0,
+                 rotation_mode='lie'):
         """
 
         :param bfm:
@@ -74,6 +75,10 @@ class BFMOptimization:
         self.fix_camera_pose = fix_camera_pose
         self.weight_shape_params = weight_shape_params
         self.weight_expression_params = weight_expression_params
+
+        assert rotation_mode in ['quaternion', 'lie'], f'Rotation mode has to be either lie or quaternion. ' \
+                                                       f'You gave {rotation_mode}'
+        self.rotation_mode = rotation_mode
 
         self.n_shape_coefficients = bfm.get_n_shape_coefficients()
         self.n_expression_coefficients = bfm.get_n_expression_coefficients()
@@ -428,6 +433,7 @@ class BFMOptimizationParameters:
         if optimization_manager.fix_camera_pose:
             camera_pose = None
         else:
+            mode = optimization_manager.rotation_mode
             # TODO: Enforcing unity at Quaternion does not yet yield desired effect
             q = Quaternion(*theta[i:i + 4]).unit  # Important that we only allow unit quaternions
             camera_pose = q.transformation_matrix
@@ -450,8 +456,16 @@ class BFMOptimizationParameters:
                      / self.optimization_manager.weight_expression_params)
 
         if not self.optimization_manager.fix_camera_pose:
-            q = Quaternion(matrix=self.camera_pose)
-            theta.extend(q)
-            theta.extend(self.camera_pose[:3, 3])
+            mode = self.optimization_manager.rotation_mode
+            if mode == 'quaternion':
+                q = Quaternion(matrix=self.camera_pose)
+                theta.extend(q)
+                theta.extend(self.camera_pose[:3, 3])
+            elif mode == 'lie':
+                w, v = SE3_to_se3(self.camera_pose)
+                theta.extend(w)
+                theta.extend(v)
+            else:
+                raise NotImplementedError(f'Rotation mode {mode} is not implemented!')
 
         return np.array(theta)

@@ -54,6 +54,9 @@ def SE3_to_se3(T):
     :param R: The rotation matrix from SE(3)
     :return: The vectors w, v of the lie algebra
     '''
+
+    assert T.shape == (4, 4), f'Transformation matrix needs to have shape (4, 4). Found {T.shape}'
+
     R = T[:3, :3]
     t = T[:3, 3]
     w_norm = acos((trace(R) - 1) / 2)
