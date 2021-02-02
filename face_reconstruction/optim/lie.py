@@ -45,7 +45,7 @@ def se3_to_SE3(w, v):
     rot_mat[:3, :3] = so3
     rot_mat[:3, 3] = trans
 
-    assert abs(det(rot_mat[:3, 3]) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(rot_mat[:3, 3])}'
+    assert abs(det(rot_mat[:3, :3]) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(rot_mat[:3, :3])}'
 
     return rot_mat
 

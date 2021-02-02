@@ -518,10 +518,17 @@ class BFMOptimizationParameters:
         else:
             mode = optimization_manager.rotation_mode
             # TODO: Enforcing unity at Quaternion does not yet yield desired effect
-            q = Quaternion(*theta[i:i + 4]).unit  # Important that we only allow unit quaternions
-            camera_pose = q.transformation_matrix
-            i = i + 4
-            camera_pose[:3, 3] = theta[i:i + 3]
+            if mode == 'quaternion':
+                q = Quaternion(*theta[i:i + 4]).unit  # Important that we only allow unit quaternions
+                camera_pose = q.transformation_matrix
+                i = i + 4
+                camera_pose[:3, 3] = theta[i:i + 3]
+                i = i + 3
+                camera_pose[:3, :3] *= theta[i]
+            elif mode == 'lie':
+                w = theta[i:i + 3]
+                v = theta[i+3:i + 6]
+                camera_pose = se3_to_SE3(w, v)
 
         return BFMOptimizationParameters(
             optimization_manager=optimization_manager,
