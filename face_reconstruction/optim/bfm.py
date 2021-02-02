@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from enum import Enum, auto
+from typing import Union
+from deprecated import deprecated
 
 import trimesh
 from scipy import optimize
@@ -10,6 +12,7 @@ from face_reconstruction.graphics import SimpleImageRenderer
 from face_reconstruction.model import BaselFaceModel
 from face_reconstruction.optim.nn import NearestNeighborMode
 from face_reconstruction.utils.math import add_column
+from face_reconstruction.optim.lie import SE3_to_se3, se3_to_SE3
 
 """
 Optimization is split into 3 modules:
@@ -96,15 +99,23 @@ class BFMOptimization:
         upper_bounds.extend([1, 1, 1, 1, float('inf'), float('inf'), float('inf')])
         self.upper_bounds = np.array(upper_bounds)
 
+    @deprecated("Use BFMOptimizationContext to run the optimization. "
+                "Otherwise, you might loose fixed/initial params as you lack the context object.")
     def run_optimization(self, loss, initial_params, max_nfev=100, verbose=2, x_scale='jac'):
-        return optimize.least_squares(loss,
-                                      initial_params.to_theta(),
-                                      max_nfev=max_nfev,
-                                      verbose=verbose,
-                                      x_scale=x_scale)
+        context = self.create_optimization_context(loss, initial_params, max_nfev=max_nfev, verbose=verbose,
+                                                   x_scale=x_scale)
+        result = context.run_optimization()
+        return result
 
+    @deprecated("Use BFMOptimizationContext to create parameters from theta. "
+                "Otherwise, you might loose fixed/initial params.")
     def create_parameters_from_theta(self, theta: np.ndarray):
         return BFMOptimizationParameters.from_theta(self, theta)
+
+    @staticmethod
+    def create_optimization_context(loss, initial_params, max_nfev=100, verbose=2, x_scale='jac'):
+        context = BFMOptimizationContext(loss, initial_params, max_nfev=max_nfev, verbose=verbose, x_scale=x_scale)
+        return context
 
     def create_parameters(self,
                           shape_coefficients: np.ndarray = None,
@@ -118,12 +129,7 @@ class BFMOptimization:
             camera_pose=camera_pose)
 
     def create_parameters_from_other(self, parameters):
-        return BFMOptimizationParameters(
-            self,
-            shape_coefficients=parameters.shape_coefficients,
-            expression_coefficients=parameters.shape_coefficients,
-            camera_pose=parameters.camera_pose
-        )
+        return parameters.with_new_manager(self)
 
     def create_sparse_loss(self,
                            renderer,
@@ -166,20 +172,59 @@ class BFMOptimization:
                                        distance_type=distance_type, regularization_strength=regularization_strength)
 
 
+class BFMOptimizationContext:
+    """
+    Encapsulates the context of a single optimization run. Needed in order to hold the initial parameters as
+    the theta list that is communicated to the optimizer only contains the parameters that are to be optimized.
+    Fixed parameters, i.e., those specified as initial parameters that are outside the n_shape_coefficients or
+    n_expression_coefficients bounds, can then be obtained from this context wrapper.
+    """
+
+    def __init__(self, loss, initial_params, max_nfev=100, verbose=2, x_scale='jac'):
+        self.loss = loss
+        self.initial_params = initial_params
+        self.max_nfev = max_nfev
+        self.verbose = verbose
+        self.x_scale = x_scale
+
+    def run_optimization(self, *args, **kwargs):
+        self.loss.set_context(self)
+        result = optimize.least_squares(self.loss,
+                                        self.initial_params.to_theta(),
+                                        max_nfev=self.max_nfev,
+                                        verbose=self.verbose,
+                                        x_scale=self.x_scale)
+        return result
+
+    def create_parameters_from_theta(self, theta):
+        return BFMOptimizationParameters.from_theta(self, theta)
+
+
 class BFMOptimizationLoss(ABC):
     def __init__(self, optimization_manager: BFMOptimization, regularization_strength):
         self.optimization_manager = optimization_manager
         self.regularization_strength = regularization_strength
+        self.context = None
 
     def __call__(self, *args, **kwargs):
         return self.loss(args[0], args[1:], kwargs)
+
+    def set_context(self, context: BFMOptimizationContext):
+        self.context = context
+
+    def create_parameters_from_theta(self, theta):
+        if self.context is None:
+            print("Loss function should be used from within OptimizationRunner")
+            return self.optimization_manager.create_parameters_from_theta(theta)
+        else:
+            return self.context.create_parameters_from_theta(theta)
 
     @abstractmethod
     def loss(self, theta, *args, **kwargs):
         pass
 
     def _apply_params_to_model(self, theta):
-        parameters = self.optimization_manager.create_parameters_from_theta(theta)
+        parameters = self.create_parameters_from_theta(theta)
 
         shape_coefficients = parameters.shape_coefficients
         expression_coefficients = parameters.expression_coefficients
@@ -196,10 +241,32 @@ class BFMOptimizationLoss(ABC):
     def _compute_regularization_terms(self, params):
         regularization_terms = []
         if self.regularization_strength is not None:
-            regularization_terms.extend(params.shape_coefficients[:self.optimization_manager.n_params_expression])
-            regularization_terms.extend(
-                params.expression_coefficients[:self.optimization_manager.n_params_expression])
-            regularization_terms.extend(params.color_coefficients[:self.optimization_manager.n_params_color])
+            # Regularization on shape coefficients
+            n_params_shape = self.optimization_manager.n_params_shape
+            if n_params_shape > 0:
+                shape_coefficients_variance = self.optimization_manager.bfm.get_shape_coefficients_variance()
+                shape_regularization = params.shape_coefficients[:n_params_shape]
+                shape_regularization /= np.sqrt(shape_coefficients_variance[:n_params_shape])  # Divide by standard dev
+                regularization_terms.extend(shape_regularization)
+
+            # Regularization on expression coefficients
+            n_params_expression = self.optimization_manager.n_params_expression
+            if n_params_expression > 0:
+                expression_coefficients_variance = self.optimization_manager.bfm.get_expression_coefficients_variance()
+                expression_regularization = params.expression_coefficients[:n_params_expression]
+                expression_regularization /= np.sqrt(
+                    expression_coefficients_variance[:n_params_expression])  # Divide by standard dev
+                regularization_terms.extend(expression_regularization)
+
+            # Regularization on color coefficients
+            n_params_color = self.optimization_manager.n_params_color
+            if n_params_color > 0:
+                color_coefficients_variance = self.optimization_manager.bfm.get_color_coefficients_variance()
+                color_regularization = params.color_coefficients[:n_params_color]
+                color_regularization /= np.sqrt(
+                    color_coefficients_variance[:n_params_color])  # Divide by standard dev
+                regularization_terms.extend(color_regularization)
+
             regularization_terms = self.regularization_strength * np.array(regularization_terms)
         return regularization_terms
 
@@ -239,7 +306,7 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
         self.fixed_expression_coefficients = fixed_expression_coefficients
 
     def loss(self, theta, *args, **kwargs):
-        parameters = self.optimization_manager.create_parameters_from_theta(theta)
+        parameters = self.create_parameters_from_theta(theta)
 
         if self.fixed_shape_coefficients is None:
             shape_coefficients = parameters.shape_coefficients
@@ -300,7 +367,7 @@ class SparseOptimizationLoss3D(BFMOptimizationLoss):
 
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
-                self.optimization_manager.create_parameters_from_theta(theta))
+                self.create_parameters_from_theta(theta))
             residuals = np.hstack((residuals, regularization_terms.sum()))
 
         return residuals
@@ -359,7 +426,7 @@ class DenseOptimizationLoss3D(BFMOptimizationLoss):
         residuals = residuals.reshape(-1)
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
-                self.optimization_manager.create_parameters_from_theta(theta))
+                self.create_parameters_from_theta(theta))
             residuals = np.hstack((residuals, regularization_terms.sum()))
 
         return residuals
@@ -401,18 +468,18 @@ class BFMOptimizationParameters:
         # Shape and expression coefficients are multiplied by their weight to enforce that changing them
         # will have a higher impact depending on the weight
         self.shape_coefficients = np.hstack(
-            [shape_coefficients[:optimization_manager.n_params_shape],
-             np.zeros((n_shape_coefficients - n_params_shape))])
-        self.expression_coefficients = np.hstack([expression_coefficients[:n_params_expression],
-                                                  np.zeros((n_expression_coefficients - n_params_expression))])
+            [shape_coefficients,
+             np.zeros((n_shape_coefficients - len(shape_coefficients)))])
+        self.expression_coefficients = np.hstack([expression_coefficients,
+                                                  np.zeros((n_expression_coefficients - len(expression_coefficients)))])
         self.color_coefficients = np.zeros(n_color_coefficients)
 
         assert camera_pose is not None or optimization_manager.fix_camera_pose, "Camera pose may only be None if it is fixed"
         if camera_pose is not None:
-            self.camera_pose = camera_pose
+            self.camera_pose = np.array(camera_pose, dtype=np.float)
 
     @staticmethod
-    def from_theta(optimization_manager: BFMOptimization, theta: np.ndarray):
+    def from_theta(optimization_manager: Union[BFMOptimization, BFMOptimizationContext], theta: np.ndarray):
         """
         :param optimization_manager:
             Specifies how the optimization should be done
@@ -422,12 +489,28 @@ class BFMOptimizationParameters:
             The next `n_expression_params` are expression coefficients
             The final 7 parameters are the quaternion defining the camera rotation (4 params) and the translation (3 params)
         """
+        context = None
+        if isinstance(optimization_manager, BFMOptimizationContext):
+            context = optimization_manager
+            optimization_manager = context.loss.optimization_manager
+
         n_params_shape = optimization_manager.n_params_shape
         n_params_expression = optimization_manager.n_params_expression
 
-        shape_coefficients = theta[:n_params_shape] * optimization_manager.weight_shape_params
-        expression_coefficients = theta[
-                                  n_params_shape:n_params_shape + n_params_expression] * optimization_manager.weight_expression_params
+        if context is None:
+            # No access to initial or fixed parameters
+            # Just reconstruct coefficients from what is there in the theta list
+            shape_coefficients = theta[:n_params_shape] * optimization_manager.weight_shape_params
+            expression_coefficients = theta[n_params_shape:n_params_shape + n_params_expression] \
+                                      * optimization_manager.weight_expression_params
+        else:
+            # Access to initial or fixed parameters
+            # Combine initial parameters and what is there in the theta list
+            shape_coefficients = context.initial_params.shape_coefficients
+            shape_coefficients[:n_params_shape] = theta[:n_params_shape] * optimization_manager.weight_shape_params
+            expression_coefficients = context.initial_params.expression_coefficients
+            expression_coefficients[:n_params_expression] = theta[n_params_shape:n_params_shape + n_params_expression] \
+                                                            * optimization_manager.weight_expression_params
         i = n_params_shape + n_params_expression
 
         if optimization_manager.fix_camera_pose:
@@ -446,6 +529,14 @@ class BFMOptimizationParameters:
             expression_coefficients=expression_coefficients,
             camera_pose=camera_pose)
 
+    def with_new_manager(self, optimization_manager: BFMOptimization):
+        return BFMOptimizationParameters(
+            optimization_manager=optimization_manager,
+            shape_coefficients=self.shape_coefficients,
+            expression_coefficients=self.expression_coefficients,
+            camera_pose=self.camera_pose
+        )
+
     def to_theta(self):
         theta = []
         # To translate the parameters back into a theta list, shape and expression coefficients have to be divided
@@ -458,9 +549,13 @@ class BFMOptimizationParameters:
         if not self.optimization_manager.fix_camera_pose:
             mode = self.optimization_manager.rotation_mode
             if mode == 'quaternion':
-                q = Quaternion(matrix=self.camera_pose)
+                scaling_factor = np.linalg.norm(self.camera_pose[0, :3])
+                rotation_matrix = self.camera_pose[:3, :3]
+                rotation_matrix /= scaling_factor
+                q = Quaternion(matrix=rotation_matrix)
                 theta.extend(q)
                 theta.extend(self.camera_pose[:3, 3])
+                theta.append(scaling_factor)
             elif mode == 'lie':
                 w, v = SE3_to_se3(self.camera_pose)
                 theta.extend(w)

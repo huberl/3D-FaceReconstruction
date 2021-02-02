@@ -45,6 +45,8 @@ def se3_to_SE3(w, v):
     rot_mat[:3, :3] = so3
     rot_mat[:3, 3] = trans
 
+    assert abs(det(rot_mat[:3, 3]) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(rot_mat[:3, 3])}'
+
     return rot_mat
 
 
@@ -59,6 +61,7 @@ def SE3_to_se3(T):
 
     R = T[:3, :3]
     t = T[:3, 3]
+    assert abs(det(R) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(R)}'
     w_norm = acos((trace(R) - 1) / 2)
 
     w = w_norm / (2 * sin(w_norm)) * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
@@ -79,6 +82,7 @@ def rot2eul(mat):
 
     # Transform Transformation matrix to rotation matrix if needed
     R = mat[:3, :3]
+    assert abs(det(R) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(R)}'
 
     beta = -np.arcsin(R[2, 0])
     alpha = np.arctan2(R[2, 1]/np.cos(beta), R[2, 2]/np.cos(beta))
