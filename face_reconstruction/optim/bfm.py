@@ -44,6 +44,10 @@ class DistanceType(Enum):
     POINT_TO_PLANE = auto()
 
 
+# =========================================================================
+# Optimization Manager
+# =========================================================================
+
 class BFMOptimization:
     def __init__(self,
                  bfm: BaselFaceModel,
@@ -174,6 +178,28 @@ class BFMOptimization:
                                        distance_type=distance_type, regularization_strength=regularization_strength,
                                        pointcloud_normals=pointcloud_normals)
 
+    def create_combined_loss_3d(self,
+                                bfm_landmark_indices,
+                                img_landmark_points_3d,
+                                pointcloud: np.ndarray,
+                                nearest_neighbors: np.ndarray,
+                                nearest_neighbor_mode: NearestNeighborMode,
+                                distance_type: DistanceType,
+                                weight_sparse_term: float = 1,
+                                regularization_strength: float = None,
+                                pointcloud_normals: np.ndarray = None
+                                ):
+        return CombinedLoss3D(self, bfm_landmark_indices=bfm_landmark_indices,
+                              img_landmark_points_3d=img_landmark_points_3d,
+                              pointcloud=pointcloud, nearest_neighbors=nearest_neighbors,
+                              nearest_neighbor_mode=nearest_neighbor_mode,
+                              distance_type=distance_type, weight_sparse_term=weight_sparse_term,
+                              regularization_strength=regularization_strength, pointcloud_normals=pointcloud_normals)
+
+
+# =========================================================================
+# Optimization Context
+# =========================================================================
 
 class BFMOptimizationContext:
     """
@@ -220,6 +246,10 @@ class BFMOptimizationContext:
     def create_parameters_from_theta(self, theta):
         return BFMOptimizationParameters.from_theta(self, theta)
 
+
+# =========================================================================
+# Loss functions
+# =========================================================================
 
 class BFMOptimizationLoss(ABC):
     def __init__(self, optimization_manager: BFMOptimization, regularization_strength):
@@ -463,6 +493,80 @@ class DenseOptimizationLoss3D(BFMOptimizationLoss):
 
         return residuals
 
+
+class CombinedLoss3D(BFMOptimizationLoss):
+
+    def __init__(self, optimization_manager: BFMOptimization,
+                 bfm_landmark_indices: np.ndarray,
+                 img_landmark_points_3d: np.ndarray,
+                 pointcloud: np.ndarray,
+                 nearest_neighbors: np.ndarray,
+                 nearest_neighbor_mode: NearestNeighborMode,
+                 distance_type: DistanceType,
+                 weight_sparse_term: float = 1,
+                 regularization_strength: float = None,
+                 pointcloud_normals: np.ndarray = None):
+        super(CombinedLoss3D, self).__init__(optimization_manager, regularization_strength)
+        self.bfm_landmark_indices = bfm_landmark_indices
+        self.img_landmark_points_3d = img_landmark_points_3d
+        self.pointcloud = pointcloud
+        self.nearest_neighbors = nearest_neighbors
+        self.nearest_neighbor_mode = nearest_neighbor_mode
+        self.distance_type = distance_type
+        self.pointcloud_normals = pointcloud_normals
+        self.weight_sparse_term = weight_sparse_term
+
+    def loss(self, theta, *args, **kwargs):
+        bfm_vertices, face_mesh = self._apply_params_to_model(theta)
+        bfm_vertices = bfm_vertices[:, :3]
+
+        residuals = []
+        if self.distance_type == DistanceType.POINT_TO_PLANE:
+            face_trimesh = trimesh.Trimesh(
+                vertices=bfm_vertices,
+                faces=face_mesh.tvi)
+
+            if self.nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                distances = self.pointcloud[self.nearest_neighbors] - bfm_vertices
+                residuals.extend(np.sum(face_trimesh.vertex_normals * distances, axis=1))
+                if self.pointcloud_normals is not None:
+                    # Can do symmetric point-to-plane
+                    residuals.extend(np.sum(self.pointcloud_normals[self.nearest_neighbors] * distances, axis=1))
+            elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                distances = self.pointcloud - bfm_vertices[self.nearest_neighbors]
+                residuals.extend(np.sum(face_trimesh.vertex_normals[self.nearest_neighbors] * distances, axis=1))
+                if self.pointcloud_normals is not None:
+                    # Can do symmetric point-to-plane
+                    residuals.extend(np.sum(self.pointcloud_normals * distances, axis=1))
+            else:
+                raise ValueError(f"Unknown nearest_neighbor_mode: {self.nearest_neighbor_mode}")
+        elif self.distance_type == DistanceType.POINT_TO_POINT:
+            # Simple point-to-point distance of vertices and corresponding nearest neighbors
+            if self.nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                residuals.extend(bfm_vertices - self.pointcloud[self.nearest_neighbors])
+            elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                residuals.extend(bfm_vertices[self.nearest_neighbors] - self.pointcloud)
+            else:
+                raise ValueError(f"Unknown nearest_neighbor_mode: {self.nearest_neighbor_mode}")
+        else:
+            raise ValueError(f"Unknown distance type: {self.distance_type}")
+
+        # Sparse residuals
+        landmark_points = bfm_vertices[self.bfm_landmark_indices]
+        residuals.extend(self.weight_sparse_term * (landmark_points[:, :3] - self.img_landmark_points_3d))
+
+        residuals = np.array(residuals).reshape(-1)
+        if self.regularization_strength is not None:
+            regularization_terms = self._compute_regularization_terms(
+                self.create_parameters_from_theta(theta))
+            residuals = np.hstack((residuals, regularization_terms))
+
+        return residuals
+
+
+# =========================================================================
+# Optimization Parameters
+# =========================================================================
 
 class BFMOptimizationParameters:
 

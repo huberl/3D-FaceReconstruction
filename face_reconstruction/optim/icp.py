@@ -64,10 +64,73 @@ def run_icp(optimizer: BFMOptimization,
         the number of iterations needed
 
     """
+    loss_factory = lambda indices: \
+        optimizer.create_dense_loss_3d(pointcloud,
+                                       indices,
+                                       nearest_neighbor_mode=nearest_neighbor_mode,
+                                       distance_type=distance_type,
+                                       regularization_strength=l2_regularization,
+                                       pointcloud_normals=pointcloud_normals)
+    return _run_icp(optimizer=optimizer,
+                    loss_factory=loss_factory,
+                    pointcloud=pointcloud,
+                    face_model=face_model,
+                    initial_params=initial_params,
+                    max_iterations=max_iterations,
+                    max_nfev=max_nfev,
+                    tolerance=tolerance,
+                    nearest_neighbor_mode=nearest_neighbor_mode)
+
+
+def run_icp_combined(optimizer: BFMOptimization,
+                     bfm_landmark_indices,
+                     img_landmark_points_3d,
+                     pointcloud: np.ndarray,
+                     face_model: BaselFaceModel,
+                     initial_params: BFMOptimizationParameters,
+                     weight_sparse_term=1,
+                     max_iterations=20,
+                     max_nfev=20,
+                     tolerance=0.001,
+                     nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
+                     distance_type=DistanceType.POINT_TO_POINT,
+                     l2_regularization: float = None,
+                     pointcloud_normals: np.ndarray = None):
+    """
+    Runs ICP with a combined loss function (Sparse + Dense term)
+    """
+    loss_factory = lambda indices: \
+        optimizer.create_combined_loss_3d(bfm_landmark_indices, img_landmark_points_3d,
+                                          pointcloud,
+                                          indices,
+                                          nearest_neighbor_mode=nearest_neighbor_mode,
+                                          distance_type=distance_type,
+                                          weight_sparse_term=weight_sparse_term,
+                                          regularization_strength=l2_regularization,
+                                          pointcloud_normals=pointcloud_normals)
+    return _run_icp(optimizer=optimizer,
+                    loss_factory=loss_factory,
+                    pointcloud=pointcloud,
+                    face_model=face_model,
+                    initial_params=initial_params,
+                    max_iterations=max_iterations,
+                    max_nfev=max_nfev,
+                    tolerance=tolerance,
+                    nearest_neighbor_mode=nearest_neighbor_mode)
+
+
+def _run_icp(optimizer: BFMOptimization,
+             loss_factory,
+             pointcloud: np.ndarray,
+             face_model: BaselFaceModel,
+             initial_params: BFMOptimizationParameters,
+             max_iterations=20,
+             max_nfev=20,
+             tolerance=0.001,
+             nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES):
     params = initial_params
 
     prev_error = 0
-    i = 0
     distances = None
     param_history = []
     for i in range(max_iterations):
@@ -87,12 +150,7 @@ def run_icp(optimizer: BFMOptimization,
             raise ValueError(f"Unknown nearest_neighbor_mode: {nearest_neighbor_mode}")
 
         # Create 3D loss function
-        loss = optimizer.create_dense_loss_3d(pointcloud,
-                                              indices,
-                                              nearest_neighbor_mode=nearest_neighbor_mode,
-                                              distance_type=distance_type,
-                                              regularization_strength=l2_regularization,
-                                              pointcloud_normals=pointcloud_normals)
+        loss = loss_factory(indices)
 
         # Optimize distance between face mesh vertices and their nearest neighbors
         context = optimizer.create_optimization_context(loss, params, max_nfev=max_nfev)
