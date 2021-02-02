@@ -1,10 +1,10 @@
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib import cm
 
-from face_reconstruction.utils.io import create_directories
-
 from env import PLOTS_PATH
-import numpy as np
+from face_reconstruction.utils.io import create_directories, generate_run_name
+
 
 class PlotManager:
 
@@ -16,14 +16,19 @@ class PlotManager:
         file_path = f"{PLOTS_PATH}/{self.plot_group}/{plot_name}"
         create_directories(file_path)
         plt.savefig(file_path)
-    
+
+    @staticmethod
+    def new_run(plot_group: str, prefix: str = 'run'):
+        run_name = generate_run_name(f"{PLOTS_PATH}/{plot_group}", prefix)
+        return PlotManager(f"{plot_group}/{run_name}")
+
 def plot_params(params):
     params_count = np.count_nonzero(params)
     params_stripped = params[:params_count]
     langs = [i for i in range(params_count)]
     plt.bar(langs,params_stripped)
     plt.show()
-    
+
 def plot_reconstruction_error(image_depth, model_depth ):
     height,length = np.shape(image_depth)
     error_image = np.empty((height,length,3))
@@ -36,5 +41,4 @@ def plot_reconstruction_error(image_depth, model_depth ):
             else:
                 error_image[i][j] =(255,255,255)
     return error_image
-
 

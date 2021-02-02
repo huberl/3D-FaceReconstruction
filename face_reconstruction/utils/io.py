@@ -48,3 +48,18 @@ def list_file_numbering(directory, prefix, suffix=None):
     file_names = [Path(file_name).stem for file_name in file_names]
     numbering = sorted([int(regex.search(file_name).group(1)) for file_name in file_names if regex.match(file_name)])
     return numbering
+
+
+def generate_run_name(directory, run_prefix):
+    """
+    Assumes that runs will be stored in folder run_dir and have format "{run_prefix}-{run_id}".
+    Generates a new run name by searching for existing runs and adding 1 to the one with the highest ID
+    """
+    run_ids = list_file_numbering(directory, f"{run_prefix}-")
+    # regex = re.compile(f"{run_prefix}-(\d+)$")
+    # run_names = glob(f"{run_dir}/{run_prefix}-*")
+    # run_names = [Path(run_name).stem for run_name in run_names]
+    # run_ids = [int(regex.search(run_name).group(1)) for run_name in run_names if regex.match(run_name)]
+
+    run_id = max(run_ids) + 1 if len(run_ids) > 0 else 1
+    return f"{run_prefix}-{run_id}"
