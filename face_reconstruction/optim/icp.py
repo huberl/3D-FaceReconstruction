@@ -89,8 +89,9 @@ def run_icp(optimizer: BFMOptimization,
                                               regularization_strength=l2_regularization)
 
         # Optimize distance between face mesh vertices and their nearest neighbors
-        result = optimizer.run_optimization(loss, params, max_nfev=max_nfev)
-        params = optimizer.create_parameters_from_theta(result.x)
+        context = optimizer.create_optimization_context(loss, params, max_nfev=max_nfev)
+        result = context.run_optimization(loss, params, max_nfev=max_nfev)
+        params = context.create_parameters_from_theta(result.x)
 
         # check error
         mean_error = np.mean(distances)
