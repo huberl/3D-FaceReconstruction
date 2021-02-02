@@ -15,7 +15,8 @@ def run_icp(optimizer: BFMOptimization,
             tolerance=0.001,
             nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
             distance_type=DistanceType.POINT_TO_POINT,
-            l2_regularization: float = None):
+            l2_regularization: float = None,
+            pointcloud_normals: np.ndarray = None):
     """
     Performs ICP to fit the given face_model as closely as possible to the given pointcloud.
     ICP consists of two phases:
@@ -52,6 +53,9 @@ def run_icp(optimizer: BFMOptimization,
             specifies how distances are calculated in phase 2
         l2_regularization:
             specifies the extent of L2-regularization that will be imposed on the face model coefficients in phase 2
+        pointcloud_normals:
+            if provided and distance_type = POINT_TO_PLANE, then symmetric point-to-plane will be computed for
+            the dense reconstruction, i.e., both the face mesh plane as well as planes on the pointcloud will be used
 
     Returns
     -------
@@ -86,7 +90,8 @@ def run_icp(optimizer: BFMOptimization,
                                               indices,
                                               nearest_neighbor_mode=nearest_neighbor_mode,
                                               distance_type=distance_type,
-                                              regularization_strength=l2_regularization)
+                                              regularization_strength=l2_regularization,
+                                              pointcloud_normals=pointcloud_normals)
 
         # Optimize distance between face mesh vertices and their nearest neighbors
         context = optimizer.create_optimization_context(loss, params, max_nfev=max_nfev)
