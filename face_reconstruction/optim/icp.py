@@ -69,6 +69,7 @@ def run_icp(optimizer: BFMOptimization,
     prev_error = 0
     i = 0
     distances = None
+    param_history = []
     for i in range(max_iterations):
         face_mesh = face_model.draw_sample(
             shape_coefficients=params.shape_coefficients,
@@ -97,6 +98,7 @@ def run_icp(optimizer: BFMOptimization,
         context = optimizer.create_optimization_context(loss, params, max_nfev=max_nfev)
         result = context.run_optimization(loss, params, max_nfev=max_nfev)
         params = context.create_parameters_from_theta(result.x)
+        param_history.extend(context.get_param_history())
 
         # check error
         mean_error = np.mean(distances)
@@ -104,4 +106,4 @@ def run_icp(optimizer: BFMOptimization,
             break
         prev_error = mean_error
 
-    return params, distances, i
+    return params, distances, param_history

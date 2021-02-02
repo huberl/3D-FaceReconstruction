@@ -7,11 +7,13 @@ import trimesh
 from scipy import optimize
 import numpy as np
 from pyquaternion import Quaternion
+from numpy.linalg import det
 
 from face_reconstruction.graphics import SimpleImageRenderer
 from face_reconstruction.model import BaselFaceModel
 from face_reconstruction.optim.nn import NearestNeighborMode
 from face_reconstruction.utils.math import add_column
+from face_reconstruction.optim.lie import SE3_to_se3, se3_to_SE3
 
 """
 Optimization is split into 3 modules:
@@ -49,7 +51,8 @@ class BFMOptimization:
                  n_params_expression,
                  fix_camera_pose=False,
                  weight_shape_params=1.0,
-                 weight_expression_params=1.0):
+                 weight_expression_params=1.0,
+                 rotation_mode='lie'):
         """
 
         :param bfm:
@@ -76,6 +79,10 @@ class BFMOptimization:
         self.fix_camera_pose = fix_camera_pose
         self.weight_shape_params = weight_shape_params
         self.weight_expression_params = weight_expression_params
+
+        assert rotation_mode in ['quaternion', 'lie'], f'Rotation mode has to be either lie or quaternion. ' \
+                                                       f'You gave {rotation_mode}'
+        self.rotation_mode = rotation_mode
 
         self.n_shape_coefficients = bfm.get_n_shape_coefficients()
         self.n_expression_coefficients = bfm.get_n_expression_coefficients()
@@ -182,15 +189,33 @@ class BFMOptimizationContext:
         self.max_nfev = max_nfev
         self.verbose = verbose
         self.x_scale = x_scale
+        self.param_history = []
+        self._previous_theta = None
 
     def run_optimization(self, *args, **kwargs):
         self.loss.set_context(self)
+        self.param_history = []
+        self._previous_theta = None
         result = optimize.least_squares(self.loss,
                                         self.initial_params.to_theta(),
                                         max_nfev=self.max_nfev,
                                         verbose=self.verbose,
                                         x_scale=self.x_scale)
         return result
+
+    def log_param(self, parameters):
+        theta = parameters.to_theta()
+
+        # Detect Optimization iterations by comparing the number of variables changed to the previous loss function
+        # call. scipy optimize usually tries all the parameters once separately and then updates all of them.
+        # Only when all of them are updated, the parameters are added to the history
+        if self._previous_theta is not None and np.sum((theta - self._previous_theta) != 0) == len(
+                self._previous_theta):
+            self.param_history.append(parameters)
+        self._previous_theta = theta
+
+    def get_param_history(self):
+        return list(self.param_history)
 
     def create_parameters_from_theta(self, theta):
         return BFMOptimizationParameters.from_theta(self, theta)
@@ -221,6 +246,8 @@ class BFMOptimizationLoss(ABC):
 
     def _apply_params_to_model(self, theta):
         parameters = self.create_parameters_from_theta(theta)
+        if self.context is not None:
+            self.context.log_param(parameters)
 
         shape_coefficients = parameters.shape_coefficients
         expression_coefficients = parameters.expression_coefficients
@@ -332,7 +359,7 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
 
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(parameters)
-            residuals = np.hstack((residuals, regularization_terms.sum()))
+            residuals = np.hstack((residuals, regularization_terms))
         # residuals = (residuals ** 2).sum()
 
         return residuals
@@ -364,7 +391,7 @@ class SparseOptimizationLoss3D(BFMOptimizationLoss):
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
                 self.create_parameters_from_theta(theta))
-            residuals = np.hstack((residuals, regularization_terms.sum()))
+            residuals = np.hstack((residuals, regularization_terms))
 
         return residuals
 
@@ -432,7 +459,7 @@ class DenseOptimizationLoss3D(BFMOptimizationLoss):
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
                 self.create_parameters_from_theta(theta))
-            residuals = np.hstack((residuals, regularization_terms.sum()))
+            residuals = np.hstack((residuals, regularization_terms))
 
         return residuals
 
@@ -521,13 +548,19 @@ class BFMOptimizationParameters:
         if optimization_manager.fix_camera_pose:
             camera_pose = None
         else:
+            mode = optimization_manager.rotation_mode
             # TODO: Enforcing unity at Quaternion does not yet yield desired effect
-            q = Quaternion(*theta[i:i + 4]).unit  # Important that we only allow unit quaternions
-            camera_pose = q.transformation_matrix
-            i = i + 4
-            camera_pose[:3, 3] = theta[i:i + 3]
-            i = i + 3
-            camera_pose[:3, :3] *= theta[i]  # Multiply rotation matrix with scaling factor
+            if mode == 'quaternion':
+                q = Quaternion(*theta[i:i + 4]).unit  # Important that we only allow unit quaternions
+                camera_pose = q.transformation_matrix
+                i = i + 4
+                camera_pose[:3, 3] = theta[i:i + 3]
+                i = i + 3
+                camera_pose[:3, :3] *= theta[i]
+            elif mode == 'lie':
+                w = theta[i:i + 3]
+                v = theta[i + 3:i + 6]
+                camera_pose = se3_to_SE3(w, v)
 
         return BFMOptimizationParameters(
             optimization_manager=optimization_manager,
@@ -553,12 +586,23 @@ class BFMOptimizationParameters:
                      / self.optimization_manager.weight_expression_params)
 
         if not self.optimization_manager.fix_camera_pose:
-            scaling_factor = np.linalg.norm(self.camera_pose[0, :3])
-            rotation_matrix = self.camera_pose[:3, :3]
-            rotation_matrix /= scaling_factor
-            q = Quaternion(matrix=rotation_matrix)
-            theta.extend(q)
-            theta.extend(self.camera_pose[:3, 3])
-            theta.append(scaling_factor)
+            mode = self.optimization_manager.rotation_mode
+            if mode == 'quaternion':
+                scaling_factor = np.linalg.norm(self.camera_pose[0, :3])
+                rotation_matrix = np.array(self.camera_pose[:3, :3])
+                rotation_matrix /= scaling_factor
+                if det(rotation_matrix) < 0:
+                    print('IT HAS HAPPENED!')
+                    rotation_matrix = -rotation_matrix
+                q = Quaternion(matrix=rotation_matrix)
+                theta.extend(q)
+                theta.extend(self.camera_pose[:3, 3])
+                theta.append(scaling_factor)
+            elif mode == 'lie':
+                w, v = SE3_to_se3(self.camera_pose)
+                theta.extend(w)
+                theta.extend(v)
+            else:
+                raise NotImplementedError(f'Rotation mode {mode} is not implemented!')
 
         return np.array(theta)
