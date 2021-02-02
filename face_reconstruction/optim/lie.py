@@ -41,13 +41,13 @@ def se3_to_SE3(w, v):
     #J = np.eye(3) + (1 - cos(norm(w))) * skew(w) / norm(w)**2 + (norm(w) - sin(norm(w))) * skew(w) @ skew(w) / norm(w)**3
     #trans = J @ v
 
-    rot_mat = np.eye(4)
-    rot_mat[:3, :3] = so3
-    rot_mat[:3, 3] = trans
+    transf_mat = np.eye(4)
+    transf_mat[:3, :3] = so3
+    transf_mat[:3, 3] = trans
 
-    assert abs(det(rot_mat[:3, :3]) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(rot_mat[:3, :3])}'
+    assert abs(det(transf_mat[:3, :3]) - 1.0) < 0.00001, f'Determinant of rotation matrix is not 1 but, {det(transf_mat[:3, :3])}'
 
-    return rot_mat
+    return transf_mat
 
 
 def SE3_to_se3(T):
@@ -66,7 +66,7 @@ def SE3_to_se3(T):
 
     w = w_norm / (2 * sin(w_norm)) * np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]])
 
-    J_inv = np.eye(3) - 0.5 * skew(w) + (1 / w_norm**2 - (1 + cos(w_norm)) / 2 * w_norm * sin(w_norm)) * skew(w) @ skew(w)
+    J_inv = np.eye(3) - 0.5 * skew(w) + (1 / w_norm**2 - (1 + cos(w_norm)) / (2 * w_norm * sin(w_norm))) * skew(w) @ skew(w)
     v = J_inv @ t
 
     return w, v
@@ -92,7 +92,7 @@ def rot2eul(mat):
 
 if __name__ == '__main__':
     w = np.array([1.7, 2.0, 1.0])
-    v = np.array([1.0, 1.0, 1.0])
+    v = np.array([2.0, 2.0, 3.0])
 
     T = se3_to_SE3(w, v)
     w_new, v_new = SE3_to_se3(T)
@@ -102,4 +102,3 @@ if __name__ == '__main__':
 
     print(f'Euler angles original: {rot2eul(se3_to_SE3(w, v))}')
     print(f'Euler angles inverse: {rot2eul(T)}')
-
