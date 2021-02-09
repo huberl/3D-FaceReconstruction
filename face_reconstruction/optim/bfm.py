@@ -173,6 +173,7 @@ class BFMOptimization:
                              distance_type: DistanceType,
                              regularization_strength: float = None,
                              pointcloud_normals: np.ndarray = None):
+        # Use RGBLoss3D Here instead?
         return DenseOptimizationLoss3D(self, pointcloud=pointcloud, nearest_neighbors=nearest_neighbors,
                                        nearest_neighbor_mode=nearest_neighbor_mode,
                                        distance_type=distance_type, regularization_strength=regularization_strength,
