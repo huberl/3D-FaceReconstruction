@@ -564,6 +564,30 @@ class CombinedLoss3D(BFMOptimizationLoss):
         return residuals
 
 
+class RGBLoss3D(BFMOptimizationLoss):
+    """
+    """
+    def __init__(
+        self,
+        optimization_manager: BFMOptimization,
+        regularization_strength: float = None,
+        # (maybe) additional specific stuff,
+    ):
+        super().__init__(optimization_manager, regularization_strength)
+
+    def loss(self, theta, *args, **kwargs):
+        residuals = []
+        # ...
+
+        residuals = np.array(residuals).reshape(-1)
+        if self.regularization_strength is not None:
+            regularization_terms = self._compute_regularization_terms(
+                self.create_parameters_from_theta(theta),
+            )
+            residuals = np.hstack((residuals, regularization_terms))
+        return residuals
+
+
 # =========================================================================
 # Optimization Parameters
 # =========================================================================
