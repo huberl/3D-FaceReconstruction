@@ -1,6 +1,9 @@
+from typing import List
+
 import numpy as np
 
 from face_reconstruction.model import BaselFaceModel
+from face_reconstruction.optim import KeyframeOptimizationParameters
 from face_reconstruction.optim.nn import NearestNeighborMode, nearest_neighbors
 from face_reconstruction.optim.bfm import BFMOptimization, BFMOptimizationParameters, DistanceType
 from face_reconstruction.utils.math import add_column
@@ -16,7 +19,8 @@ def run_icp(optimizer: BFMOptimization,
             nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
             distance_type=DistanceType.POINT_TO_POINT,
             l2_regularization: float = None,
-            pointcloud_normals: np.ndarray = None):
+            pointcloud_normals: np.ndarray = None,
+            return_cost_history=False):
     """
     Performs ICP to fit the given face_model as closely as possible to the given pointcloud.
     ICP consists of two phases:
@@ -56,6 +60,9 @@ def run_icp(optimizer: BFMOptimization,
         pointcloud_normals:
             if provided and distance_type = POINT_TO_PLANE, then symmetric point-to-plane will be computed for
             the dense reconstruction, i.e., both the face mesh plane as well as planes on the pointcloud will be used
+        return_cost_history:
+            Whether the cost history of the full ICP optimization should be returned. The cost history is a list of
+            floats representing the cost of the Optimization logged every time the optimizer evaluates the loss function
 
     Returns
     -------
@@ -79,7 +86,8 @@ def run_icp(optimizer: BFMOptimization,
                     max_iterations=max_iterations,
                     max_nfev=max_nfev,
                     tolerance=tolerance,
-                    nearest_neighbor_mode=nearest_neighbor_mode)
+                    nearest_neighbor_mode=nearest_neighbor_mode,
+                    return_cost_history=return_cost_history)
 
 
 def run_icp_combined(optimizer: BFMOptimization,
@@ -95,7 +103,8 @@ def run_icp_combined(optimizer: BFMOptimization,
                      nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
                      distance_type=DistanceType.POINT_TO_POINT,
                      l2_regularization: float = None,
-                     pointcloud_normals: np.ndarray = None):
+                     pointcloud_normals: np.ndarray = None,
+                     return_cost_history=False):
     """
     Runs ICP with a combined loss function (Sparse + Dense term)
     """
@@ -116,7 +125,8 @@ def run_icp_combined(optimizer: BFMOptimization,
                     max_iterations=max_iterations,
                     max_nfev=max_nfev,
                     tolerance=tolerance,
-                    nearest_neighbor_mode=nearest_neighbor_mode)
+                    nearest_neighbor_mode=nearest_neighbor_mode,
+                    return_cost_history=return_cost_history)
 
 
 def _run_icp(optimizer: BFMOptimization,
@@ -127,12 +137,14 @@ def _run_icp(optimizer: BFMOptimization,
              max_iterations=20,
              max_nfev=20,
              tolerance=0.001,
-             nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES):
+             nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
+             return_cost_history=False):
     params = initial_params
 
     prev_error = 0
     distances = None
     param_history = []
+    cost_history = []
     for i in range(max_iterations):
         face_mesh = face_model.draw_sample(
             shape_coefficients=params.shape_coefficients,
@@ -156,6 +168,66 @@ def _run_icp(optimizer: BFMOptimization,
         context = optimizer.create_optimization_context(loss, params, max_nfev=max_nfev)
         result = context.run_optimization(loss, params, max_nfev=max_nfev)
         params = context.create_parameters_from_theta(result.x)
+        param_history.extend(context.get_param_history())
+        cost_history.extend(context.get_cost_history())
+
+        # check error
+        mean_error = np.mean(distances)
+        if np.abs(prev_error - mean_error) < tolerance:
+            break
+        prev_error = mean_error
+
+    if return_cost_history:
+        return params, distances, param_history, cost_history
+    else:
+        return params, distances, param_history
+
+
+def run_icp_keyframes(optimizer: BFMOptimization,
+                      pointclouds: List[np.ndarray],
+                      face_model: BaselFaceModel,
+                      initial_params,
+                      max_iterations=20,
+                      max_nfev=20,
+                      tolerance=0.001,
+                      nearest_neighbor_mode=NearestNeighborMode.FACE_VERTICES,
+                      distance_type=DistanceType.POINT_TO_POINT,
+                      l2_regularization: float = None,
+                      pointcloud_normals: List[np.ndarray] = None):
+    params = initial_params
+
+    prev_error = 0
+    distances = None
+    param_history = []
+    for i in range(max_iterations):
+        nearest_neighbors_list = []
+        for j in range(len(pointclouds)):
+            face_mesh = face_model.draw_sample(
+                shape_coefficients=params.shape_coefficients,
+                expression_coefficients=params.expression_coefficients,
+                color_coefficients=params.color_coefficients)
+
+            # find the nearest neighbors between the current source and destination points
+            transformed_face_vertices = params.camera_poses[j] @ add_column(face_mesh.vertices, 1).T
+            transformed_face_vertices = transformed_face_vertices.T[:, :3]
+            if nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                distances, indices = nearest_neighbors(transformed_face_vertices, pointclouds[j])
+            elif nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                distances, indices = nearest_neighbors(pointclouds[j], transformed_face_vertices)
+            else:
+                raise ValueError(f"Unknown nearest_neighbor_mode: {nearest_neighbor_mode}")
+            nearest_neighbors_list.append(indices)
+
+        # Create 3D loss function
+        keyframe_loss = optimizer.create_dense_keyframe_loss(pointclouds, nearest_neighbors_list, nearest_neighbor_mode,
+                                                             distance_type,
+                                                             regularization_strength=l2_regularization,
+                                                             pointcloud_normals_list=pointcloud_normals)
+
+        # Optimize distance between face mesh vertices and their nearest neighbors
+        context = optimizer.create_optimization_context(keyframe_loss, params, max_nfev=max_nfev)
+        result = context.run_optimization(keyframe_loss, max_nfev=max_nfev)
+        params = KeyframeOptimizationParameters.from_theta(context, theta=result.x)
         param_history.extend(context.get_param_history())
 
         # check error

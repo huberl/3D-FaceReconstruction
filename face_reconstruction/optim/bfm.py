@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Union
+from typing import Union, List
 from deprecated import deprecated
 
 import trimesh
@@ -12,6 +12,7 @@ from numpy.linalg import det
 from face_reconstruction.graphics import SimpleImageRenderer
 from face_reconstruction.model import BaselFaceModel
 from face_reconstruction.optim.nn import NearestNeighborMode
+from face_reconstruction.utils.io import save_pickled, load_pickled
 from face_reconstruction.utils.math import add_column
 from face_reconstruction.optim.lie import SE3_to_se3, se3_to_SE3
 
@@ -196,6 +197,29 @@ class BFMOptimization:
                               distance_type=distance_type, weight_sparse_term=weight_sparse_term,
                               regularization_strength=regularization_strength, pointcloud_normals=pointcloud_normals)
 
+    def create_sparse_keyframe_loss(self, bfm_landmark_indices_list: List[np.ndarray],
+                                    img_landmark_points_3d_list: List[np.ndarray],
+                                    regularization_strength: float = None):
+        return SparseKeyframeLoss3D(optimization_manager=self,
+                                    bfm_landmark_indices_list=bfm_landmark_indices_list,
+                                    img_landmark_points_3d_list=img_landmark_points_3d_list,
+                                    regularization_strength=regularization_strength)
+
+    def create_dense_keyframe_loss(self,
+                                   pointclouds: List[np.ndarray],
+                                   nearest_neighbors_list: List[np.ndarray],
+                                   nearest_neighbor_mode: NearestNeighborMode,
+                                   distance_type: DistanceType,
+                                   regularization_strength: float = None,
+                                   pointcloud_normals_list: List[np.ndarray] = None):
+        return DenseKeyframeLoss3D(optimization_manager=self,
+                                   pointclouds=pointclouds,
+                                   nearest_neighbors_list=nearest_neighbors_list,
+                                   nearest_neighbor_mode=nearest_neighbor_mode, distance_type=distance_type,
+                                   regularization_strength=regularization_strength,
+                                   pointcloud_normals_list=pointcloud_normals_list
+                                   )
+
 
 # =========================================================================
 # Optimization Context
@@ -216,11 +240,13 @@ class BFMOptimizationContext:
         self.verbose = verbose
         self.x_scale = x_scale
         self.param_history = []
+        self.cost_history = []
         self._previous_theta = None
 
     def run_optimization(self, *args, **kwargs):
         self.loss.set_context(self)
         self.param_history = []
+        self.cost_history = []
         self._previous_theta = None
         result = optimize.least_squares(self.loss,
                                         self.initial_params.to_theta(),
@@ -240,8 +266,14 @@ class BFMOptimizationContext:
             self.param_history.append(parameters)
         self._previous_theta = theta
 
+    def log_cost(self, residuals: np.ndarray):
+        self.cost_history.append(0.5 * (residuals ** 2).sum())
+
     def get_param_history(self):
         return list(self.param_history)
+
+    def get_cost_history(self):
+        return list(self.cost_history)
 
     def create_parameters_from_theta(self, theta):
         return BFMOptimizationParameters.from_theta(self, theta)
@@ -258,7 +290,12 @@ class BFMOptimizationLoss(ABC):
         self.context = None
 
     def __call__(self, *args, **kwargs):
-        return self.loss(args[0], args[1:], kwargs)
+        residuals = self.loss(args[0], args[1:], kwargs)
+
+        if self.context is not None:
+            self.context.log_cost(residuals)
+
+        return residuals
 
     def set_context(self, context: BFMOptimizationContext):
         self.context = context
@@ -425,9 +462,6 @@ class SparseOptimizationLoss3D(BFMOptimizationLoss):
 
         return residuals
 
-    def __call__(self, *args, **kwargs):
-        return self.loss(args[0], args[1:], kwargs)
-
 
 class DenseOptimizationLoss3D(BFMOptimizationLoss):
     def __init__(
@@ -554,6 +588,122 @@ class CombinedLoss3D(BFMOptimizationLoss):
         # Sparse residuals
         landmark_points = bfm_vertices[self.bfm_landmark_indices]
         residuals.extend(self.weight_sparse_term * (landmark_points[:, :3] - self.img_landmark_points_3d))
+
+        residuals = np.array(residuals).reshape(-1)
+        if self.regularization_strength is not None:
+            regularization_terms = self._compute_regularization_terms(
+                self.create_parameters_from_theta(theta))
+            residuals = np.hstack((residuals, regularization_terms))
+
+        return residuals
+
+
+class SparseKeyframeLoss3D(BFMOptimizationLoss):
+
+    def __init__(
+            self,
+            optimization_manager: BFMOptimization,
+            bfm_landmark_indices_list: List[np.ndarray],
+            img_landmark_points_3d_list: List[np.ndarray],
+            regularization_strength: float = None):
+        super(SparseKeyframeLoss3D, self).__init__(optimization_manager, regularization_strength)
+        self.bfm_landmark_indices_list = bfm_landmark_indices_list
+        self.img_landmark_points_3d_list = img_landmark_points_3d_list
+
+    def loss(self, theta, *args, **kwargs):
+        n_camera_params = 6 if self.optimization_manager.rotation_mode == 'lie' else 8
+        residuals = []
+        for i in range(len(self.img_landmark_points_3d_list)):
+            # Shape coefficients are shared between keyframes, camera parameters are optimized separately
+            camera_params = theta[self.optimization_manager.n_params_shape + i * n_camera_params:
+                                  self.optimization_manager.n_params_shape + (i + 1) * n_camera_params]
+            assert len(camera_params) == n_camera_params, f"Camera params should have length {n_camera_params}"
+            theta_keyframe = np.hstack((theta[:self.optimization_manager.n_params_shape], camera_params))
+
+            bfm_vertices, _ = self._apply_params_to_model(theta_keyframe)
+            landmark_points = bfm_vertices[self.bfm_landmark_indices_list[i]]
+
+            # Simple point-to-point distance of 3D landmarks
+            residuals.extend(landmark_points[:, :3] - self.img_landmark_points_3d_list[i])
+
+        residuals = np.array(residuals).reshape(-1)
+
+        if self.regularization_strength is not None:
+            regularization_terms = self._compute_regularization_terms(
+                self.create_parameters_from_theta(theta))
+            residuals = np.hstack((residuals, regularization_terms))
+
+        return residuals
+
+
+class DenseKeyframeLoss3D(BFMOptimizationLoss):
+
+    def __init__(
+            self,
+            optimization_manager: BFMOptimization,
+            pointclouds: List[np.ndarray],
+            nearest_neighbors_list: List[np.ndarray],
+            nearest_neighbor_mode: NearestNeighborMode,
+            distance_type: DistanceType,
+            regularization_strength: float = None,
+            pointcloud_normals_list: List[np.ndarray] = None):
+        super(DenseKeyframeLoss3D, self).__init__(optimization_manager, regularization_strength)
+
+        # assert distance_type == DistanceType.POINT_TO_PLANE or nearest_neighbor_mode.FACE_VERTICES, \
+        #     f"point-to-plane distance only works when computing nearest neighbors for face vertices"
+
+        self.pointclouds = pointclouds
+        self.nearest_neighbors_list = nearest_neighbors_list
+        self.nearest_neighbor_mode = nearest_neighbor_mode
+        self.distance_type = distance_type
+        self.pointcloud_normals_list = pointcloud_normals_list
+
+    def loss(self, theta, *args, **kwargs):
+        n_camera_params = 6 if self.optimization_manager.rotation_mode == 'lie' else 8
+        residuals = []
+        for i in range(len(self.pointclouds)):
+            # Shape coefficients are shared between keyframes, camera parameters are optimized separately
+            camera_params = theta[self.optimization_manager.n_params_shape + i * n_camera_params:
+                                  self.optimization_manager.n_params_shape + (i + 1) * n_camera_params]
+            assert len(camera_params) == n_camera_params, f"Camera params should have length {n_camera_params}"
+            theta_keyframe = np.hstack((theta[:self.optimization_manager.n_params_shape], camera_params))
+
+            bfm_vertices, face_mesh = self._apply_params_to_model(theta_keyframe)
+            bfm_vertices = bfm_vertices[:, :3]
+
+            pointcloud = self.pointclouds[i]
+            pointcloud_normals = self.pointcloud_normals_list[i] if self.pointcloud_normals_list else None
+            nearest_neighbors = self.nearest_neighbors_list[i]
+
+            if self.distance_type == DistanceType.POINT_TO_PLANE:
+                face_trimesh = trimesh.Trimesh(
+                    vertices=bfm_vertices,
+                    faces=face_mesh.tvi)
+
+                if self.nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                    distances = pointcloud[nearest_neighbors] - bfm_vertices
+                    residuals.extend(np.sum(face_trimesh.vertex_normals * distances, axis=1))
+                    if pointcloud_normals is not None:
+                        # Can do symmetric point-to-plane
+                        residuals.extend(np.sum(pointcloud_normals[nearest_neighbors] * distances, axis=1))
+                elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                    distances = pointcloud - bfm_vertices[nearest_neighbors]
+                    residuals.extend(np.sum(face_trimesh.vertex_normals[nearest_neighbors] * distances, axis=1))
+                    if pointcloud_normals is not None:
+                        # Can do symmetric point-to-plane
+                        residuals.extend(np.sum(pointcloud_normals * distances, axis=1))
+                else:
+                    raise ValueError(f"Unknown nearest_neighbor_mode: {self.nearest_neighbor_mode}")
+            elif self.distance_type == DistanceType.POINT_TO_POINT:
+                # Simple point-to-point distance of vertices and corresponding nearest neighbors
+                if self.nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                    residuals.extend(bfm_vertices - pointcloud[nearest_neighbors])
+                elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                    residuals.extend(bfm_vertices[nearest_neighbors] - pointcloud)
+                else:
+                    raise ValueError(f"Unknown nearest_neighbor_mode: {self.nearest_neighbor_mode}")
+            else:
+                raise ValueError(f"Unknown distance type: {self.distance_type}")
 
         residuals = np.array(residuals).reshape(-1)
         if self.regularization_strength is not None:
@@ -710,3 +860,103 @@ class BFMOptimizationParameters:
                 raise NotImplementedError(f'Rotation mode {mode} is not implemented!')
 
         return np.array(theta)
+
+    def dump(self, file_path: str):
+        bfm = self.optimization_manager.bfm
+        self.optimization_manager.bfm = None
+        save_pickled(self, file_path)
+        self.optimization_manager.bfm = bfm
+
+    @staticmethod
+    def load(file_path: str, bfm):
+        params = load_pickled(file_path)
+        params.optimization_manager.bfm = bfm
+        return params
+
+
+class KeyframeOptimizationParameters:
+
+    def __init__(self, optimization_manager, shape_coefficients, camera_poses):
+        self.optimization_manager = optimization_manager
+        self.shape_coefficients = np.hstack(
+            [shape_coefficients,
+             np.zeros((optimization_manager.n_shape_coefficients - len(shape_coefficients)))])
+        self.camera_poses = camera_poses
+        self.expression_coefficients = [0 for _ in range(optimization_manager.n_expression_coefficients)]
+        self.color_coefficients = [0 for _ in range(optimization_manager.n_color_coefficients)]
+
+    def to_theta(self):
+        theta = []
+        theta.extend(self.shape_coefficients[
+                     :self.optimization_manager.n_params_shape] / self.optimization_manager.weight_shape_params)
+        mode = self.optimization_manager.rotation_mode
+        for camera_pose in self.camera_poses:
+            if mode == 'quaternion':
+                scaling_factor = np.linalg.norm(camera_pose[0, :3])
+                rotation_matrix = np.array(camera_pose[:3, :3])
+                rotation_matrix /= scaling_factor
+                if det(rotation_matrix) < 0:
+                    print('IT HAS HAPPENED!')
+                    rotation_matrix = -rotation_matrix
+                q = Quaternion(matrix=rotation_matrix)
+                theta.extend(q)
+                theta.extend(camera_pose[:3, 3])
+                theta.append(scaling_factor)
+            elif mode == 'lie':
+                w, v = SE3_to_se3(camera_pose)
+                theta.extend(w)
+                theta.extend(v)
+            else:
+                raise NotImplementedError(f'Rotation mode {mode} is not implemented!')
+        return theta
+
+    @staticmethod
+    def from_theta(optimization_manager: Union[BFMOptimization, BFMOptimizationContext], theta: np.ndarray):
+        context = None
+        if isinstance(optimization_manager, BFMOptimizationContext):
+            context = optimization_manager
+            optimization_manager = context.loss.optimization_manager
+
+        n_params_shape = optimization_manager.n_params_shape
+
+        if context is None:
+            # No access to initial or fixed parameters
+            # Just reconstruct coefficients from what is there in the theta list
+            shape_coefficients = theta[:n_params_shape] * optimization_manager.weight_shape_params
+        else:
+            # Access to initial or fixed parameters
+            # Combine initial parameters and what is there in the theta list
+            shape_coefficients = context.initial_params.shape_coefficients
+            shape_coefficients[:n_params_shape] = theta[:n_params_shape] * optimization_manager.weight_shape_params
+
+        camera_poses = []
+        mode = optimization_manager.rotation_mode
+        n_camera_params = 6 if mode == 'lie' else 8
+        assert (len(
+            theta) - n_params_shape) % n_camera_params == 0, "theta params is not evenly dividable to yield camera params"
+        idx = n_params_shape
+        for i in range(int((len(theta) - n_params_shape) / n_camera_params)):
+            if mode == 'quaternion':
+                q = Quaternion(*theta[idx:idx + 4]).unit  # Important that we only allow unit quaternions
+                camera_pose = q.transformation_matrix
+                idx = idx + 4
+                camera_pose[:3, 3] = theta[idx:idx + 3]
+                idx = idx + 3
+                camera_pose[:3, :3] *= theta[idx]
+            elif mode == 'lie':
+                w = theta[idx:idx + 3]
+                v = theta[idx + 3:idx + 6]
+                camera_pose = se3_to_SE3(w, v)
+            idx += n_camera_params
+            camera_poses.append(camera_pose)
+
+        return KeyframeOptimizationParameters(
+            optimization_manager=optimization_manager,
+            shape_coefficients=shape_coefficients,
+            camera_poses=camera_poses)
+
+    def with_new_manager(self, optimization_manager: BFMOptimization):
+        return KeyframeOptimizationParameters(
+            optimization_manager=optimization_manager,
+            shape_coefficients=self.shape_coefficients,
+            camera_poses=self.camera_poses)
