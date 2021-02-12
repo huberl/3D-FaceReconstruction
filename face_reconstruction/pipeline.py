@@ -238,7 +238,7 @@ class BFMPreprocessor:
 
         return pointcloud, pointcloud_normals, colors
 
-    def detect_landmarks(self, img, depth_img, intrinsics):
+    def detect_landmarks(self, img, depth_img, intrinsics, threshold_landmark_deviation=500, ignore_jawline=False):
         landmarks_img, face_pos = detect_landmarks(img, return_face_pos=True)
         face_pos = face_pos[0]  # Assume there is only one face
         rgb_depth_img = depth_img
@@ -257,9 +257,16 @@ class BFMPreprocessor:
         landmark_points_3d_median = geometric_median(landmark_points_3d_render)
         distances_from_median = np.linalg.norm(landmark_points_3d_render - landmark_points_3d_median, axis=1)
 
-        threshold_landmark_deviation = 500  # It can happen that depth information is bad and back-projected landmark points are far away from the other. These should be ignored
-        valid_landmark_points_3d = \
-            np.where((np.array(rgb_depth_values) != 0) & (distances_from_median < threshold_landmark_deviation))[0]
+        # It can happen that depth information is bad and back-projected landmark points are far away from the other. These should be ignored
+        if ignore_jawline:
+            non_jawline_idx = np.ones(68, dtype=np.bool)
+            non_jawline_idx[:6] = False
+            non_jawline_idx[11:17] = False
+            valid_landmark_points_3d = \
+                np.where((np.array(rgb_depth_values) != 0) & (distances_from_median < threshold_landmark_deviation) & non_jawline_idx)[0]
+        else:
+            valid_landmark_points_3d = \
+                np.where((np.array(rgb_depth_values) != 0) & (distances_from_median < threshold_landmark_deviation))[0]
 
         pixels_without_depth = 68 - len(valid_landmark_points_3d)
         if pixels_without_depth > 0:
@@ -298,6 +305,10 @@ class BFMPreprocessor:
         body_pointcloud *= 1000  # Meters to Millimeters
         self.body_pointcloud = body_pointcloud
 
+        self.landmark_points_3d_render = landmark_points_3d_render[valid_landmark_points_3d]
+        self.bfm_landmark_indices_render = self.bfm_landmark_indices[
+            valid_landmark_points_3d]
+
         return landmark_points_3d_render[valid_landmark_points_3d], self.bfm_landmark_indices[
             valid_landmark_points_3d], face_pointcloud, self.face_pointcloud_colors
 
@@ -319,6 +330,7 @@ class BFMPreprocessor:
         return initial_params
 
     def setup_scene(self, params_render, show_pointcloud=True, show_mask=True, show_pointcloud_face=False,
+                    show_landmarks=False,
                     cut_around_face=4):
         face_mesh = self.bfm.draw_sample(
             shape_coefficients=params_render.shape_coefficients,
@@ -343,10 +355,18 @@ class BFMPreprocessor:
             scene.add(pyrender.Mesh.from_points(self.face_pointcloud, colors=self.face_pointcloud_colors))
         if show_pointcloud and not show_pointcloud_face:
             scene.add(pyrender.Mesh.from_points(self.body_pointcloud, colors=self.body_pointcloud_colors))
+        if show_landmarks:
+            bfm_landmark_vertices = np.array(face_mesh.vertices)[self.bfm_landmark_indices_render]
+            scene.add(pyrender.Mesh.from_points(self.landmark_points_3d_render,
+                                                colors=[[255, 0, 0] for _ in
+                                                        range(len(self.landmark_points_3d_render))]))
+            scene.add(pyrender.Mesh.from_points(bfm_landmark_vertices,
+                                                colors=[[0, 255, 0] for _ in range(len(bfm_landmark_vertices))]),
+                      pose=params_render.camera_pose)
         return scene
 
-    def render_onto_img(self, params):
-        scene = self.setup_scene(params, show_pointcloud=False, show_mask=True)
+    def render_onto_img(self, params, show_landmarks=False):
+        scene = self.setup_scene(params, show_pointcloud=False, show_mask=True, show_landmarks=show_landmarks)
 
         r = pyrender.OffscreenRenderer(self.img_width, self.img_height)
         color, depth = r.render(scene)
@@ -369,7 +389,7 @@ class BFMPreprocessor:
         plt.colorbar()
         plt.clim(0, 50)
 
-        return (diff_img[depth != 0] * diff_img[depth != 0]).mean()
+        return (diff_img[depth != 0]).mean()
 
     def store_param_history(self, plot_manager, folder, param_history):
         for i, params in enumerate(param_history):

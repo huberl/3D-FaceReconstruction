@@ -1,5 +1,5 @@
 from face_reconstruction.optim import NearestNeighborMode, DistanceType, run_icp, BFMOptimization, \
-    KeyframeOptimizationParameters, run_icp_keyframes, BFMOptimizationParameters
+    KeyframeOptimizationParameters, run_icp_keyframes, BFMOptimizationParameters, run_icp_combined
 from face_reconstruction.pipeline import BFMPreprocessor
 from face_reconstruction.plots import PlotManager
 
@@ -12,11 +12,11 @@ keyframes = [0, 1, 2, 3, 4, 5]
 # Sparse Reconstruction Params
 # -------------------------------------------------------------------------
 
-n_params_shape_sparse = 3
-n_params_expression_sparse = 0
-weight_shape_params_sparse = 1
-weight_expression_params_sparse = 1
-l2_regularization_sparse = 10000
+n_params_shape_sparse = 30
+n_params_expression_sparse = 30
+weight_shape_params_sparse = 1000
+weight_expression_params_sparse = 1000
+l2_regularization_sparse = 1000
 
 # -------------------------------------------------------------------------
 # Dense Reconstruction Params
@@ -25,7 +25,7 @@ l2_regularization_sparse = 10000
 nn_mode = NearestNeighborMode.FACE_VERTICES  # FACE_VERTICES: every face vertex will be assigned its nearest neighbor in pointcloud
 # POINTCLOUD: every point in pointcloud will be assigned its nearest neighbor in face model
 distance_type = DistanceType.POINT_TO_POINT
-icp_iterations = 2
+icp_iterations = 3
 optimization_steps_per_iteration = 10
 l2_regularization_dense = 4000  # 10000 for Lie
 
@@ -34,13 +34,18 @@ n_params_expression_dense = 30  # 10
 weight_shape_params_dense = 100  # 10000, 10000000000 for POINT_TO_PLANE
 weight_expression_params_dense = 100  # 1000, 10000000000 for POINT_TO_PLANE
 
+weight_sparse_term = 10
+
 
 def preprocess(frame_id):
     img, depth_img, intrinsics = preprocessor.load_frame(frame_id)
     pointcloud, pointcloud_normals, colors = preprocessor.to_3d(img, depth_img, intrinsics)
-    landmark_points, bfm_landmark_indices, face_pointcloud, face_pointcloud_colors = preprocessor.detect_landmarks(img,
-                                                                                                                   depth_img,
-                                                                                                                   intrinsics)
+    landmark_points, bfm_landmark_indices, face_pointcloud, face_pointcloud_colors = \
+        preprocessor.detect_landmarks(img,
+                                      depth_img,
+                                      intrinsics,
+                                      threshold_landmark_deviation=200,
+                                      ignore_jawline=True)
     return bfm_landmark_indices, landmark_points, face_pointcloud, pointcloud_normals
 
 
@@ -52,17 +57,21 @@ def run_sparse_optimization(sparse_optimizer, bfm_landmark_indices, landmark_poi
     return sparse_context.create_parameters_from_theta(result.x)
 
 
-def run_dense_optimization(dense_optimizer, face_pointcloud, pointcloud_normals, params_sparse):
-    params, distances, dense_param_history = run_icp(dense_optimizer,
-                                                     face_pointcloud,
-                                                     preprocessor.bfm,
-                                                     params_sparse.with_new_manager(dense_optimizer),
-                                                     max_iterations=icp_iterations,
-                                                     nearest_neighbor_mode=nn_mode,
-                                                     distance_type=distance_type,
-                                                     max_nfev=optimization_steps_per_iteration,
-                                                     l2_regularization=l2_regularization_dense,
-                                                     pointcloud_normals=pointcloud_normals)
+def run_dense_optimization(dense_optimizer, bfm_landmark_indices, landmark_points, face_pointcloud, pointcloud_normals,
+                           params_sparse):
+    params, distances, dense_param_history = run_icp_combined(dense_optimizer,
+                                                              bfm_landmark_indices,
+                                                              landmark_points,
+                                                              face_pointcloud,
+                                                              preprocessor.bfm,
+                                                              params_sparse.with_new_manager(dense_optimizer),
+                                                              max_iterations=icp_iterations,
+                                                              nearest_neighbor_mode=nn_mode,
+                                                              distance_type=distance_type,
+                                                              max_nfev=optimization_steps_per_iteration,
+                                                              l2_regularization=l2_regularization_dense,
+                                                              pointcloud_normals=pointcloud_normals,
+                                                              weight_sparse_term=weight_sparse_term)
     return params, dense_param_history
 
 
@@ -84,47 +93,6 @@ if __name__ == "__main__":
     plot_manager = PlotManager.new_run("video_reconstruction")
 
     initial_params = preprocessor.get_initial_params(sparse_optimizer)
-
-    # if keyframes:
-    #     print(f"===== Estimating shape coefficients from keyframes =====")
-    #
-    #     # Only optimize for shape coefficients
-    #     sparse_optimizer = BFMOptimization(preprocessor.bfm,
-    #                                        n_params_shape=n_params_shape_sparse,
-    #                                        n_params_expression=0,
-    #                                        weight_shape_params=weight_shape_params_sparse,
-    #                                        weight_expression_params=weight_expression_params_sparse,
-    #                                        rotation_mode='lie')
-    #
-    #     dense_optimizer = BFMOptimization(preprocessor.bfm,
-    #                                       n_params_shape=n_params_shape_dense,
-    #                                       n_params_expression=0,
-    #                                       weight_shape_params=weight_shape_params_dense,
-    #                                       weight_expression_params=weight_expression_params_dense,
-    #                                       rotation_mode='lie')
-    #
-    #     frame_id = keyframes[0]  # Currently, only one keyframe supported
-    #     bfm_landmark_indices, landmark_points, face_pointcloud, pointcloud_normals = preprocess(frame_id)
-    #     params_sparse = run_sparse_optimization(sparse_optimizer, bfm_landmark_indices, landmark_points, initial_params)
-    #     params_dense, param_history = run_dense_optimization(dense_optimizer, face_pointcloud, pointcloud_normals, params_sparse)
-    #
-    #     # Don't optimize for shape coefficients anymore
-    #     sparse_optimizer = BFMOptimization(preprocessor.bfm,
-    #                                        n_params_shape=0,
-    #                                        n_params_expression=n_params_expression_sparse,
-    #                                        weight_shape_params=weight_shape_params_sparse,
-    #                                        weight_expression_params=weight_expression_params_sparse,
-    #                                        rotation_mode='lie')
-    #
-    #     dense_optimizer = BFMOptimization(preprocessor.bfm,
-    #                                       n_params_shape=0,
-    #                                       n_params_expression=n_params_expression_dense,
-    #                                       weight_shape_params=weight_shape_params_dense,
-    #                                       weight_expression_params=weight_expression_params_dense,
-    #                                       rotation_mode='lie')
-    #
-    #     initial_params = params_dense.with_new_manager(sparse_optimizer)
-    #     plot_manager.save_params(initial_params, "keyframe_params")
 
     if keyframes:
         print(f"===== Estimating shape coefficients from keyframes =====")
@@ -203,8 +171,8 @@ if __name__ == "__main__":
         print(f"  --- Sparse Reconstruction ---")
         params_sparse = run_sparse_optimization(sparse_optimizer, bfm_landmark_indices, landmark_points, initial_params)
         print(f"  --- Dense Reconstruction ---")
-        params_dense, param_history = run_dense_optimization(dense_optimizer, face_pointcloud, pointcloud_normals,
-                                                             params_sparse)
+        params_dense, param_history = run_dense_optimization(dense_optimizer, bfm_landmark_indices, landmark_points,
+                                                             face_pointcloud, pointcloud_normals, params_sparse)
 
         img_with_mask = preprocessor.render_onto_img(params_dense)
         plot_manager.save_image(img_with_mask, f"frame_{frame_id:04d}.jpg")

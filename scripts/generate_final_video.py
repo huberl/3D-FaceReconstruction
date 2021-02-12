@@ -1,3 +1,5 @@
+from statistics import mean
+
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 
@@ -25,6 +27,7 @@ def plot_reconstruction_error(frame_id):
     preprocessor.to_3d()
     error = preprocessor.plot_reconstruction_error(load_params(frame_id))
     plt.xlabel(f"Mean Reconstruction Error: {error:.3f}")
+    return error
 
 
 def plot_rgb(frame_id):
@@ -60,10 +63,10 @@ if __name__ == '__main__':
     plot_manager = PlotManager(f"video_reconstruction/{args.run_name}")
     preprocessor = BFMPreprocessor()
 
-
     gs = gridspec.GridSpec(2, 4, height_ratios=[3, 1])
     gs2 = gridspec.GridSpec(2, 2, height_ratios=[3, 1])
 
+    reconstruction_errors = []
     for frame_id in get_frames():
         fig = plt.figure(figsize=(20, 10))
 
@@ -90,7 +93,8 @@ if __name__ == '__main__':
         plt.xlim(0, 150)
         plt.tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False, left=False,
                         labelleft=False)
-        plot_reconstruction_error(frame_id)
+        error = plot_reconstruction_error(frame_id)
+        reconstruction_errors.append(error)
 
         fig.add_subplot(gs2[2])
         plt.title("Shape Coefficients")
@@ -108,3 +112,4 @@ if __name__ == '__main__':
         plt.close()
 
     plot_manager.cd("final").generate_video('frame_', '.jpg')
+    print(mean(reconstruction_errors))
