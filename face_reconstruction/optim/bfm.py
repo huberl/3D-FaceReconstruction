@@ -34,8 +34,8 @@ Optimization is split into 3 modules:
         
     - Parameters (BFMOptimizationParameters):
         Syntactic sugar. Provides an interface to translate between a list of parameters (theta) and an object of 
-        meaningful attributes, e.g., divided into shape coefficients, expression coefficients and camera pose
-        
+        meaningful attributes, e.g., divided into shape coefficients, expression coefficients, color coefficients
+        and camera pose
 """
 
 
@@ -81,7 +81,7 @@ class BFMOptimization:
             Specifies how much more changing a shape coefficient parameter will impact the loss
         :param weight_expression_params:
             Specifies how much more changing an expression coefficient parameter will impact the loss
-        :param weight_expression_params:
+        :param weight_color_params:
             Specifies how much more changing a color coefficient parameter will impact the loss
         """
         self.bfm = bfm
@@ -91,7 +91,7 @@ class BFMOptimization:
         self.fix_camera_pose = fix_camera_pose
         self.weight_shape_params = weight_shape_params
         self.weight_expression_params = weight_expression_params
-        self.weight_expression_color = weight_expression_color
+        self.weight_color_params = weight_color_params
 
         assert rotation_mode in ['quaternion', 'lie'], f'Rotation mode has to be either lie or quaternion. ' \
                                                        f'You gave {rotation_mode}'
@@ -136,12 +136,14 @@ class BFMOptimization:
     def create_parameters(self,
                           shape_coefficients: np.ndarray = None,
                           expression_coefficients: np.ndarray = None,
+                          color_coefficients: np.ndarray = None,
                           camera_pose: np.ndarray = None
                           ):
         return BFMOptimizationParameters(
             self,
             shape_coefficients=shape_coefficients,
             expression_coefficients=expression_coefficients,
+            color_coefficients=expression_coefficients,
             camera_pose=camera_pose)
 
     def create_parameters_from_other(self, parameters):
@@ -154,6 +156,7 @@ class BFMOptimization:
                            fixed_camera_pose: np.ndarray = None,
                            fixed_shape_coefficients: np.ndarray = None,
                            fixed_expression_coefficients: np.ndarray = None,
+                           fixed_color_coefficients: np.ndarray = None,
                            regularization_strength: float = None
                            ):
         return SparseOptimizationLoss(
@@ -164,6 +167,7 @@ class BFMOptimization:
             fixed_camera_pose=fixed_camera_pose,
             fixed_shape_coefficients=fixed_shape_coefficients,
             fixed_expression_coefficients=fixed_expression_coefficients,
+            fixed_color_coefficients=fixed_color_coefficients,
             regularization_strength=regularization_strength)
 
     def create_sparse_loss_3d(self,
@@ -237,7 +241,7 @@ class BFMOptimizationContext:
     Encapsulates the context of a single optimization run. Needed in order to hold the initial parameters as
     the theta list that is communicated to the optimizer only contains the parameters that are to be optimized.
     Fixed parameters, i.e., those specified as initial parameters that are outside the n_shape_coefficients or
-    n_expression_coefficients bounds, can then be obtained from this context wrapper.
+    n_expression_coefficients or n_color_coefficients bounds, can then be obtained from this context wrapper.
     """
 
     def __init__(self, loss, initial_params, max_nfev=100, verbose=2, x_scale='jac'):
@@ -312,12 +316,14 @@ class BFMOptimizationLoss(ABC):
 
         shape_coefficients = parameters.shape_coefficients
         expression_coefficients = parameters.expression_coefficients
+        color_coefficients = parameters.color_coefficients
         camera_pose = parameters.camera_pose
 
         face_mesh = self.optimization_manager.bfm.draw_sample(
             shape_coefficients=shape_coefficients,
             expression_coefficients=expression_coefficients,
-            color_coefficients=[0 for _ in range(self.optimization_manager.n_color_coefficients)])
+            color_coefficients=color_coefficients,
+        )
         bfm_vertices = add_column(np.array(face_mesh.vertices), 1)
         bfm_vertices = camera_pose @ bfm_vertices.T
         return bfm_vertices.T, face_mesh
@@ -366,6 +372,7 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
             fixed_camera_pose: np.ndarray = None,
             fixed_shape_coefficients: np.ndarray = None,
             fixed_expression_coefficients: np.ndarray = None,
+            fixed_color_coefficients: np.ndarray = None,
             regularization_strength=None):
         """
         :param optimization_manager:
@@ -388,6 +395,7 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
 
         self.fixed_shape_coefficients = fixed_shape_coefficients
         self.fixed_expression_coefficients = fixed_expression_coefficients
+        self.fixed_color_coefficients = fixed_color_coefficients
 
     def loss(self, theta, *args, **kwargs):
         parameters = self.create_parameters_from_theta(theta)
@@ -402,6 +410,11 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
         else:
             expression_coefficients = self.fixed_expression_coefficients
 
+        if self.fixed_color_coefficients is None:
+            color_coefficients = parameters.color_coefficients
+        else:
+            color_coefficients = self.fixed_color_coefficients
+
         if self.optimization_manager.fix_camera_pose:
             camera_pose = self.fixed_camera_pose
         else:
@@ -410,7 +423,8 @@ class SparseOptimizationLoss(BFMOptimizationLoss):
         face_mesh = self.optimization_manager.bfm.draw_sample(
             shape_coefficients=shape_coefficients,
             expression_coefficients=expression_coefficients,
-            color_coefficients=[0 for _ in range(self.optimization_manager.n_color_coefficients)])
+            color_coefficients=color_coefficients,
+        )
         landmark_points = np.array(face_mesh.vertices)[self.bfm_landmark_indices]
         face_landmark_pixels = self.renderer.project_points(camera_pose, landmark_points)
         residuals = face_landmark_pixels - self.img_landmark_pixels
@@ -661,7 +675,7 @@ class BFMOptimizationParameters:
         assert color_coefficients is not None or n_params_color == 0, "If n_params_color > 0 then color coefficients have to be provided"
         if color_coefficients is None:
             color_coefficients = []
-        # Shape and expression coefficients are multiplied by their weight to enforce that changing them
+        # Shape, expression & color coefficients are multiplied by their weight to enforce that changing them
         # will have a higher impact depending on the weight
         self.shape_coefficients = np.hstack(
             [shape_coefficients,
@@ -742,6 +756,7 @@ class BFMOptimizationParameters:
             optimization_manager=optimization_manager,
             shape_coefficients=shape_coefficients,
             expression_coefficients=expression_coefficients,
+            color_coefficients=color_coefficients,
             camera_pose=camera_pose)
 
     def with_new_manager(self, optimization_manager: BFMOptimization):
@@ -749,6 +764,7 @@ class BFMOptimizationParameters:
             optimization_manager=optimization_manager,
             shape_coefficients=self.shape_coefficients,
             expression_coefficients=self.expression_coefficients,
+            color_coefficients=self.color_coefficients,
             camera_pose=self.camera_pose
         )
 
