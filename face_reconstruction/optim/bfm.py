@@ -202,14 +202,17 @@ class BFMOptimization:
                                 distance_type: DistanceType,
                                 weight_sparse_term: float = 1,
                                 regularization_strength: float = None,
-                                pointcloud_normals: np.ndarray = None
+                                pointcloud_normals: np.ndarray = None,
+                                pointcloud_colors: np.ndarray = None,
                                 ):
         return CombinedLoss3D(self, bfm_landmark_indices=bfm_landmark_indices,
                               img_landmark_points_3d=img_landmark_points_3d,
                               pointcloud=pointcloud, nearest_neighbors=nearest_neighbors,
                               nearest_neighbor_mode=nearest_neighbor_mode,
                               distance_type=distance_type, weight_sparse_term=weight_sparse_term,
-                              regularization_strength=regularization_strength, pointcloud_normals=pointcloud_normals)
+                              regularization_strength=regularization_strength,
+                              pointcloud_normals=pointcloud_normals,
+                              pointcloud_colors=pointcloud_colors)
 
 
 class BFMOptimizationRGB(BFMOptimization):
@@ -550,7 +553,8 @@ class CombinedLoss3D(BFMOptimizationLoss):
                  distance_type: DistanceType,
                  weight_sparse_term: float = 1,
                  regularization_strength: float = None,
-                 pointcloud_normals: np.ndarray = None):
+                 pointcloud_normals: np.ndarray = None,
+                 pointcloud_colors: np.ndarray = None):
         super(CombinedLoss3D, self).__init__(optimization_manager, regularization_strength)
         self.bfm_landmark_indices = bfm_landmark_indices
         self.img_landmark_points_3d = img_landmark_points_3d
@@ -559,6 +563,7 @@ class CombinedLoss3D(BFMOptimizationLoss):
         self.nearest_neighbor_mode = nearest_neighbor_mode
         self.distance_type = distance_type
         self.pointcloud_normals = pointcloud_normals
+        self.pointcloud_colors = pointcloud_colors
         self.weight_sparse_term = weight_sparse_term
 
     def loss(self, theta, *args, **kwargs):
@@ -600,33 +605,22 @@ class CombinedLoss3D(BFMOptimizationLoss):
         landmark_points = bfm_vertices[self.bfm_landmark_indices]
         residuals.extend(self.weight_sparse_term * (landmark_points[:, :3] - self.img_landmark_points_3d))
 
+        # Color residuals
+        if self.pointcloud_colors is not None:
+            if self.nearest_neighbor_mode == NearestNeighborMode.FACE_VERTICES:
+                mesh_colors = np.array(face_mesh.colors)
+                pointcloud_colors = self.pointcloud_colors[self.nearest_neighbors]
+            elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
+                mesh_colors = np.array(face_mesh.colors)[self.nearest_neighbors]
+                pointcloud_colors = self.pointcloud_colors
+            residuals.extend(mesh_colors - pointcloud_colors)
+
         residuals = np.array(residuals).reshape(-1)
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
                 self.create_parameters_from_theta(theta))
             residuals = np.hstack((residuals, regularization_terms))
 
-        return residuals
-
-
-class RGBLoss3D(DenseOptimizationLoss3D):
-    """
-    """
-    def loss(self, theta, *args, **kwargs):
-        bfm_vertices, face_mesh = self._apply_params_to_model(theta)
-        bfm_vertices = bfm_vertices[:, :3]
-
-        residuals = []
-        # currently passing only:
-        # nearest neighbor mode: POINTCLOUD & distance: POINT_TO_POINT
-        residuals = np.array(face_mesh.colors)[self.nearest_neighbors] - (
-            self.pointcloud/255.0)
-        residuals = np.array(residuals).reshape(-1)
-        if self.regularization_strength is not None:
-            regularization_terms = self._compute_regularization_terms(
-                self.create_parameters_from_theta(theta),
-            )
-            residuals = np.hstack((residuals, regularization_terms))
         return residuals
 
 
