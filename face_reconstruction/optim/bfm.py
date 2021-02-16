@@ -53,9 +53,11 @@ class BFMOptimization:
                  bfm: BaselFaceModel,
                  n_params_shape,
                  n_params_expression,
+                 n_params_color,
                  fix_camera_pose=False,
                  weight_shape_params=1.0,
                  weight_expression_params=1.0,
+                 weight_color_params=1.0,
                  rotation_mode='lie'):
         """
 
@@ -69,20 +71,27 @@ class BFMOptimization:
             Specifies that only the first `n_params_expression` parameters of the expression model will be optimized for.
             These are the parameters that have the biggest impact on the face model.
             The remaining coefficients will be held constant to 0.
+        :param n_params_color:
+            Specifies that only the first `n_params_color` parameters of the expression model will be optimized for.
+            These are the parameters that have the biggest impact on the face model.
+            The remaining coefficients will be held constant to 0.
         :param fix_camera_pose:
             Whether the camera pose should be optimized for
         :param weight_shape_params:
             Specifies how much more changing a shape coefficient parameter will impact the loss
         :param weight_expression_params:
             Specifies how much more changing an expression coefficient parameter will impact the loss
+        :param weight_expression_params:
+            Specifies how much more changing a color coefficient parameter will impact the loss
         """
         self.bfm = bfm
         self.n_params_shape = n_params_shape
         self.n_params_expression = n_params_expression
-        self.n_params_color = 0  # Currently, optimizing for color is not supported
+        self.n_params_color = n_params_color
         self.fix_camera_pose = fix_camera_pose
         self.weight_shape_params = weight_shape_params
         self.weight_expression_params = weight_expression_params
+        self.weight_expression_color = weight_expression_color
 
         assert rotation_mode in ['quaternion', 'lie'], f'Rotation mode has to be either lie or quaternion. ' \
                                                        f'You gave {rotation_mode}'
@@ -95,12 +104,14 @@ class BFMOptimization:
         lower_bounds = []
         lower_bounds.extend([-float('inf') for _ in range(n_params_shape)])
         lower_bounds.extend([-float('inf') for _ in range(n_params_expression)])
+        lower_bounds.extend([-float('inf') for _ in range(n_params_color)])
         lower_bounds.extend([-1, -1, -1, -1, -float('inf'), -float('inf'), -float('inf')])
         self.lower_bounds = np.array(lower_bounds)
 
         upper_bounds = []
         upper_bounds.extend([float('inf') for _ in range(n_params_shape)])
         upper_bounds.extend([float('inf') for _ in range(n_params_expression)])
+        upper_bounds.extend([float('inf') for _ in range(n_params_color)])
         upper_bounds.extend([1, 1, 1, 1, float('inf'), float('inf'), float('inf')])
         self.upper_bounds = np.array(upper_bounds)
 
@@ -615,6 +626,7 @@ class BFMOptimizationParameters:
                  optimization_manager: BFMOptimization,
                  shape_coefficients: np.ndarray,
                  expression_coefficients: np.ndarray,
+                 color_coefficients: np.ndarray,
                  camera_pose: np.ndarray):
         """
         Defines all the parameters that will be optimized for
@@ -624,6 +636,8 @@ class BFMOptimizationParameters:
             The part of the parameters that describes the shape coefficients
         :param expression_coefficients:
             The part of the parameters that describes the expression coefficients
+        :param color_coefficients:
+            The part of the parameters that describes the color coefficients
         :param camera_pose:
             The part of the parameters that describes the 4x4 camera pose matrix
         """
@@ -634,6 +648,7 @@ class BFMOptimizationParameters:
         n_color_coefficients = optimization_manager.n_color_coefficients
         n_params_shape = optimization_manager.n_params_shape
         n_params_expression = optimization_manager.n_params_expression
+        n_params_color = optimization_manager.n_params_color
 
         assert shape_coefficients is not None or n_params_shape == 0, "If n_params_shape > 0 then shape coefficients have to be provided"
         if shape_coefficients is None:
@@ -642,6 +657,10 @@ class BFMOptimizationParameters:
         assert expression_coefficients is not None or n_params_expression == 0, "If n_params_expression > 0 then expression coefficients have to be provided"
         if expression_coefficients is None:
             expression_coefficients = []
+
+        assert color_coefficients is not None or n_params_color == 0, "If n_params_color > 0 then color coefficients have to be provided"
+        if color_coefficients is None:
+            color_coefficients = []
         # Shape and expression coefficients are multiplied by their weight to enforce that changing them
         # will have a higher impact depending on the weight
         self.shape_coefficients = np.hstack(
@@ -649,7 +668,10 @@ class BFMOptimizationParameters:
              np.zeros((n_shape_coefficients - len(shape_coefficients)))])
         self.expression_coefficients = np.hstack([expression_coefficients,
                                                   np.zeros((n_expression_coefficients - len(expression_coefficients)))])
-        self.color_coefficients = np.zeros(n_color_coefficients)
+        self.color_coefficients = np.hstack([
+            color_coefficients,
+            np.zeros((n_color_coefficients - len(color_coefficients))),
+        ])
 
         assert camera_pose is not None or optimization_manager.fix_camera_pose, "Camera pose may only be None if it is fixed"
         if camera_pose is not None:
@@ -664,6 +686,7 @@ class BFMOptimizationParameters:
             Contains a list of parameters that are interpreted as follows.
             The 1st `n_shape_params` are shape coefficients
             The next `n_expression_params` are expression coefficients
+            The next `n_color_params` are expression coefficients
             The final 7 parameters are the quaternion defining the camera rotation (4 params) and the translation (3 params)
         """
         context = None
@@ -673,22 +696,30 @@ class BFMOptimizationParameters:
 
         n_params_shape = optimization_manager.n_params_shape
         n_params_expression = optimization_manager.n_params_expression
+        n_params_color = optimization_manager.n_params_color
 
         if context is None:
             # No access to initial or fixed parameters
             # Just reconstruct coefficients from what is there in the theta list
-            shape_coefficients = theta[:n_params_shape] * optimization_manager.weight_shape_params
-            expression_coefficients = theta[n_params_shape:n_params_shape + n_params_expression] \
-                                      * optimization_manager.weight_expression_params
+            start, end = 0, n_params_shape
+            shape_coefficients = theta[start:end] * optimization_manager.weight_shape_params
+            start, end = end, end + n_params_expression
+            expression_coefficients = theta[start:end] * optimization_manager.weight_expression_params
+            start, end = end, end + n_params_color
+            color_coefficients = theta[start:end] * optimization_manager.weight_color_params
         else:
             # Access to initial or fixed parameters
             # Combine initial parameters and what is there in the theta list
+            start, end = 0, n_params_shape
             shape_coefficients = context.initial_params.shape_coefficients
-            shape_coefficients[:n_params_shape] = theta[:n_params_shape] * optimization_manager.weight_shape_params
+            shape_coefficients[:n_params_shape] = theta[start:end] * optimization_manager.weight_shape_params
+            start, end = end, end + n_params_expression
             expression_coefficients = context.initial_params.expression_coefficients
-            expression_coefficients[:n_params_expression] = theta[n_params_shape:n_params_shape + n_params_expression] \
-                                                            * optimization_manager.weight_expression_params
-        i = n_params_shape + n_params_expression
+            expression_coefficients[:n_params_expression] = theta[start:end] * optimization_manager.weight_expression_params
+            start, end = end, end + n_params_color
+            color_coefficients = context.initial_params.color_coefficients
+            color_coefficients[:n_params_color] = theta[start:end] * optimization_manager.weight_color_params
+        i = n_params_shape + n_params_expression + n_params_color
 
         if optimization_manager.fix_camera_pose:
             camera_pose = None
@@ -723,12 +754,14 @@ class BFMOptimizationParameters:
 
     def to_theta(self):
         theta = []
-        # To translate the parameters back into a theta list, shape and expression coefficients have to be divided
-        # again by their weights
+        # To translate the parameters back into a theta list, shape,
+        # expression & color coefficients have to be divided again by their weights
         theta.extend(self.shape_coefficients[:self.optimization_manager.n_params_shape]
                      / self.optimization_manager.weight_shape_params)
         theta.extend(self.expression_coefficients[:self.optimization_manager.n_params_expression]
                      / self.optimization_manager.weight_expression_params)
+        theta.extend(self.color_coefficients[:self.optimization_manager.n_params_color]
+                     / self.optimization_manager.weight_color_params)
 
         if not self.optimization_manager.fix_camera_pose:
             mode = self.optimization_manager.rotation_mode
