@@ -173,7 +173,6 @@ class BFMOptimization:
                              distance_type: DistanceType,
                              regularization_strength: float = None,
                              pointcloud_normals: np.ndarray = None):
-        # Use RGBLoss3D Here instead?
         return DenseOptimizationLoss3D(self, pointcloud=pointcloud, nearest_neighbors=nearest_neighbors,
                                        nearest_neighbor_mode=nearest_neighbor_mode,
                                        distance_type=distance_type, regularization_strength=regularization_strength,
@@ -197,6 +196,26 @@ class BFMOptimization:
                               distance_type=distance_type, weight_sparse_term=weight_sparse_term,
                               regularization_strength=regularization_strength, pointcloud_normals=pointcloud_normals)
 
+
+class BFMOptimizationRGB(BFMOptimization):
+    def create_dense_loss_3d(
+        self,
+        pointcloud: np.ndarray,
+        nearest_neighbors: np.ndarray,
+        nearest_neighbor_mode: NearestNeighborMode,
+        distance_type: DistanceType,
+        regularization_strength: float = None,
+        pointcloud_normals: np.ndarray = None,
+    ):
+        return RGBLoss3D(
+            self,
+            pointcloud=pointcloud,
+            nearest_neighbors=nearest_neighbors,
+            nearest_neighbor_mode=nearest_neighbor_mode,
+            distance_type=distance_type,
+            regularization_strength=regularization_strength,
+            pointcloud_normals=pointcloud_normals,
+        )
 
 # =========================================================================
 # Optimization Context
@@ -565,21 +584,18 @@ class CombinedLoss3D(BFMOptimizationLoss):
         return residuals
 
 
-class RGBLoss3D(BFMOptimizationLoss):
+class RGBLoss3D(DenseOptimizationLoss3D):
     """
     """
-    def __init__(
-        self,
-        optimization_manager: BFMOptimization,
-        regularization_strength: float = None,
-        # (maybe) additional specific stuff,
-    ):
-        super().__init__(optimization_manager, regularization_strength)
-
     def loss(self, theta, *args, **kwargs):
-        residuals = []
-        # ...
+        bfm_vertices, face_mesh = self._apply_params_to_model(theta)
+        bfm_vertices = bfm_vertices[:, :3]
 
+        residuals = []
+        # currently passing only:
+        # nearest neighbor mode: POINTCLOUD & distance: POINT_TO_POINT
+        residuals = np.array(face_mesh.colors)[self.nearest_neighbors] - (
+            self.pointcloud/255.0)
         residuals = np.array(residuals).reshape(-1)
         if self.regularization_strength is not None:
             regularization_terms = self._compute_regularization_terms(
