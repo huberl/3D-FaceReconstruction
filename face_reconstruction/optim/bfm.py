@@ -201,6 +201,7 @@ class BFMOptimization:
                                 nearest_neighbor_mode: NearestNeighborMode,
                                 distance_type: DistanceType,
                                 weight_sparse_term: float = 1,
+                                weight_color_term: float = 1,
                                 regularization_strength: float = None,
                                 pointcloud_normals: np.ndarray = None,
                                 pointcloud_colors: np.ndarray = None,
@@ -209,7 +210,9 @@ class BFMOptimization:
                               img_landmark_points_3d=img_landmark_points_3d,
                               pointcloud=pointcloud, nearest_neighbors=nearest_neighbors,
                               nearest_neighbor_mode=nearest_neighbor_mode,
-                              distance_type=distance_type, weight_sparse_term=weight_sparse_term,
+                              distance_type=distance_type,
+                              weight_sparse_term=weight_sparse_term,
+                              weight_color_term=weight_color_term,
                               regularization_strength=regularization_strength,
                               pointcloud_normals=pointcloud_normals,
                               pointcloud_colors=pointcloud_colors)
@@ -552,6 +555,7 @@ class CombinedLoss3D(BFMOptimizationLoss):
                  nearest_neighbor_mode: NearestNeighborMode,
                  distance_type: DistanceType,
                  weight_sparse_term: float = 1,
+                 weight_color_term: float = 1,
                  regularization_strength: float = None,
                  pointcloud_normals: np.ndarray = None,
                  pointcloud_colors: np.ndarray = None):
@@ -565,6 +569,7 @@ class CombinedLoss3D(BFMOptimizationLoss):
         self.pointcloud_normals = pointcloud_normals
         self.pointcloud_colors = pointcloud_colors
         self.weight_sparse_term = weight_sparse_term
+        self.weight_color_term = weight_color_term
 
     def loss(self, theta, *args, **kwargs):
         bfm_vertices, face_mesh = self._apply_params_to_model(theta)
@@ -613,7 +618,7 @@ class CombinedLoss3D(BFMOptimizationLoss):
             elif self.nearest_neighbor_mode == NearestNeighborMode.POINTCLOUD:
                 mesh_colors = np.array(face_mesh.colors)[self.nearest_neighbors]
                 pointcloud_colors = self.pointcloud_colors
-            residuals.extend(mesh_colors - pointcloud_colors)
+            residuals.extend(self.weight_color_term * (mesh_colors - pointcloud_colors))
 
         residuals = np.array(residuals).reshape(-1)
         if self.regularization_strength is not None:
