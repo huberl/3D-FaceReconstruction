@@ -97,6 +97,7 @@ def run_icp_combined(optimizer: BFMOptimization,
                      face_model: BaselFaceModel,
                      initial_params: BFMOptimizationParameters,
                      weight_sparse_term=1,
+                     weight_color_term=1,
                      max_iterations=20,
                      max_nfev=20,
                      tolerance=0.001,
@@ -104,6 +105,7 @@ def run_icp_combined(optimizer: BFMOptimization,
                      distance_type=DistanceType.POINT_TO_POINT,
                      l2_regularization: float = None,
                      pointcloud_normals: np.ndarray = None,
+                     pointcloud_colors: np.ndarray = None,
                      return_cost_history=False):
     """
     Runs ICP with a combined loss function (Sparse + Dense term)
@@ -115,8 +117,10 @@ def run_icp_combined(optimizer: BFMOptimization,
                                           nearest_neighbor_mode=nearest_neighbor_mode,
                                           distance_type=distance_type,
                                           weight_sparse_term=weight_sparse_term,
+                                          weight_color_term=weight_color_term,
                                           regularization_strength=l2_regularization,
-                                          pointcloud_normals=pointcloud_normals)
+                                          pointcloud_normals=pointcloud_normals,
+                                          pointcloud_colors=pointcloud_colors)
     return _run_icp(optimizer=optimizer,
                     loss_factory=loss_factory,
                     pointcloud=pointcloud,
